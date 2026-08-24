@@ -252,11 +252,21 @@ Testerna omfattar:
 - Ett drag som råkar pågå exakt när blockgränsen renderas om kan avbrytas.
 - Wake Lock kräver webbläsarstöd och normalt HTTPS.
 
-## Mobil användning
+## PWA och publicering
 
-Appen fungerar bäst publicerad som en statisk HTTPS-webbplats. Tränaren öppnar länken i Safari eller Chrome och lägger sedan webbplatsen på hemskärmen. Varje tränare får en egen lokal spelarlista och historik på sin mobil.
+Appen publiceras automatiskt på GitHub Pages som en HTTPS-skyddad Progressive Web App:
 
-Att skicka själva HTML-filen via Dropbox fungerar, men en vanlig HTTPS-publicering ger en stabilare adress, bättre helskärmsupplevelse och bättre förutsättningar för Wake Lock.
+`https://jakobenlund.github.io/bkbk-matchschema/`
+
+- `manifest.webmanifest` anger appnamn, färger, startadress och ikoner.
+- `service-worker.js` cachar appskalet så att appen kan öppnas utan nät efter ett lyckat onlinebesök.
+- `icons/` innehåller ikoner för hemskärm och installation.
+- `.github/workflows/pages.yml` kör testerna, kopierar `matchschema.html` till publiceringens `index.html` och driftsätter sidan vid varje push till `main`.
+- `.gitignore` är en strikt tillåtelselista som hindrar andra dokument i Dropbox-mappen från att råka laddas upp.
+
+Tränaren öppnar länken i Safari eller Chrome och lägger webbplatsen på hemskärmen. Varje tränare får en egen lokal spelarlista och historik på sin mobil. Uppdateringar publiceras på samma adress och den senaste onlineversionen blir nästa offlineversion.
+
+Att skicka själva HTML-filen via Dropbox fungerar fortfarande, men GitHub Pages ger en stabilare adress, appinstallation, offline-cache och bättre förutsättningar för Wake Lock.
 
 ## Stil och varumärke
 
