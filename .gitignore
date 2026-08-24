@@ -1,0 +1,15 @@
+# This repository is intentionally allowlisted so unrelated Dropbox documents
+# can never be committed accidentally.
+*
+!.gitignore
+!README.md
+!matchschema.html
+!matchschema_context.md
+!manifest.webmanifest
+!service-worker.js
+!icons/
+!icons/**
+!tests/
+!tests/**
+!.github/
+!.github/**

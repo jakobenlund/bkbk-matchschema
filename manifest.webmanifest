@@ -1,0 +1,23 @@
+{
+  "name": "BKBK Matchschema",
+  "short_name": "Matchschema",
+  "description": "Matchschema för BKBK F18 Svart",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f0f4f8",
+  "theme_color": "#009640",
+  "lang": "sv",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
