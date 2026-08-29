@@ -1,6 +1,6 @@
 # BKBK Matchschema
 
-Mobile-first match scheduler for BKBK F18 Svart. It supports 2×15 and 3×15 minute matches, fair bench rotation, live substitutions, temporary player pauses, return priority, a match timer, and local match history.
+Mobile-first match scheduler for BKBK F18 Svart. It supports 2×15 and 3×15 minute matches with a selectable 3- or 5-minute substitution interval, fair bench rotation, live substitutions, temporary player pauses, return priority, a match timer, and local match history.
 
 **Live app:** https://jakobenlund.github.io/bkbk-matchschema/
 

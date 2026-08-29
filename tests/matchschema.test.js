@@ -29,28 +29,37 @@ function evaluate(code){return vm.runInContext(code,context);}
 function setPlayers(count,gkCount=3){
   evaluate(`S.players=Array.from({length:${count}},(_,i)=>({id:'p'+i,name:'Player '+i,canGK:i<${gkCount},active:true,returnPriority:false}));`);
 }
-function schedule(format,count){
-  evaluate(`S.format='${format}'`); setPlayers(count); assert.equal(evaluate('buildSchedule()'),true);
+function schedule(format,count,interval=5){
+  evaluate(`S.format='${format}';S.changeInterval=${interval}`); setPlayers(count); assert.equal(evaluate('buildSchedule()'),true);
   return JSON.parse(evaluate('JSON.stringify(S.slots)'));
 }
 
+// The setup exposes both interval choices and remembers a change when no match is active.
+assert.match(elements.get('interval-toggle').innerHTML,/3 minuter/);
+assert.match(elements.get('interval-toggle').innerHTML,/5 minuter/);
+evaluate('S.slots=[];setChangeInterval(3)');
+assert.equal(evaluate('S.changeInterval'),3);
+assert.equal(storage.get('ms2-interval'),'3');
+
 for(const format of ['2x15','3x15']){
-  const expectedSlots=format==='2x15'?6:9;
-  for(let count=5;count<=12;count++){
-    for(let run=0;run<100;run++){
-      const slots=schedule(format,count);
-      assert.equal(slots.length,expectedSlots);
-      for(const slot of slots){
-        const playing=[slot.gk,...slot.on];
-        assert.equal(playing.length,5);
-        assert.equal(new Set([...playing,...slot.bench]).size,count);
-        assert.equal(new Set(playing).size,5);
-      }
-      for(let i=1;i<slots.length;i++){
-        if(slots[i].period===slots[i-1].period)assert.equal(slots[i].gk,slots[i-1].gk);
-        if(count<=9){
-          const nextPlaying=new Set([slots[i].gk,...slots[i].on]);
-          for(const id of slots[i-1].bench)assert(nextPlaying.has(id),`${format}: ${id} stayed benched with ${count} players`);
+  for(const interval of [3,5]){
+    const expectedSlots=(format==='2x15'?30:45)/interval;
+    for(let count=5;count<=12;count++){
+      for(let run=0;run<100;run++){
+        const slots=schedule(format,count,interval);
+        assert.equal(slots.length,expectedSlots);
+        for(const slot of slots){
+          const playing=[slot.gk,...slot.on];
+          assert.equal(playing.length,5);
+          assert.equal(new Set([...playing,...slot.bench]).size,count);
+          assert.equal(new Set(playing).size,5);
+        }
+        for(let i=1;i<slots.length;i++){
+          if(slots[i].period===slots[i-1].period)assert.equal(slots[i].gk,slots[i-1].gk);
+          if(count<=9){
+            const nextPlaying=new Set([slots[i].gk,...slots[i].on]);
+            for(const id of slots[i-1].bench)assert(nextPlaying.has(id),`${format}/${interval} min: ${id} stayed benched with ${count} players`);
+          }
         }
       }
     }
@@ -73,14 +82,16 @@ const past=JSON.parse(evaluate('JSON.stringify(S.slots[0])'));
 assert.equal(evaluate(`applySwap(0,'${past.on[0]}','${past.bench[0]}')`),false);
 assert.deepEqual(JSON.parse(evaluate('JSON.stringify(S.slots[0])')),past);
 
-// The in-progress match persists its format and name.
-evaluate("S.matchId='match-test';S.matchName='Testmatch';S.format='2x15';saveMatchState();S.format='3x15';S.slots=[];loadMatchState()");
+// The in-progress match persists its format, substitution interval and name.
+schedule('2x15',8,3);
+evaluate("S.matchId='match-test';S.matchName='Testmatch';saveMatchState();S.format='3x15';S.changeInterval=5;S.slots=[];loadMatchState()");
 assert.equal(evaluate('S.format'),'2x15');
+assert.equal(evaluate('S.changeInterval'),3);
 assert.equal(evaluate('S.matchName'),'Testmatch');
-assert.equal(evaluate('S.slots.length'),6);
+assert.equal(evaluate('S.slots.length'),10);
 
 // Pausing replaces an on-field player immediately; returning gives next-block priority.
-schedule('3x15',8);
+schedule('3x15',8,5);
 evaluate('S.baseSeconds=60;S.seconds=60');
 const pausedId=evaluate('S.slots[0].on[0]');
 evaluate(`pausePlayer('${pausedId}')`);
@@ -94,6 +105,7 @@ evaluate("S.matchId='history-test';S.matchName='History test';S.baseSeconds=1800
 const history=JSON.parse(storage.get('ms2-history'));
 assert.equal(history[0].name,'History test');
 assert.equal(history[0].slots.length,9);
+assert.equal(history[0].changeInterval,5);
 assert.equal(storage.has('ms2-match'),false);
 
 console.log('matchschema tests passed');

@@ -148,6 +148,8 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
   <input class="setup-input" id="match-name-input" type="text" maxlength="80" placeholder="T.ex. BKBK–Hammarby 24 augusti">
   <div id="setup-list"></div>
   <button class="btn btn-ghost" style="margin-bottom:12px" onclick="addSetupRow()">+ Lägg till spelare</button>
+  <h2>Minuter mellan byten</h2>
+  <div class="seg" id="interval-toggle"></div>
   <h2>Matchformat</h2>
   <div class="seg" id="format-toggle"></div>
   <div class="rules-card" id="format-rules"></div>
@@ -204,7 +206,7 @@ const S = {
   players: [], // [{id,name,canGK,active,returnPriority}]
   slots: [],   // [{startMin,period,sub,gk,on[],bench[]}], all player references are IDs
   timerOn: false, seconds: 0, baseSeconds: 0, anchorStart: null, timerRef: null,
-  balanceOpen: true, format: '3x15', matchId: null, matchName: '', events: [],
+  balanceOpen: true, format: '3x15', changeInterval: 5, matchId: null, matchName: '', events: [],
 };
 
 function newId(prefix='p') {
@@ -231,10 +233,10 @@ function syncSeconds() { S.seconds = elapsedSeconds(); }
 
 // All scheduling rules live here so that the two formats cannot silently diverge.
 const FORMATS = {
-  '3x15': { label: '3×15 min', periods: 3, periodMin: 15, blockMin: 5, outfieldCount: 4 },
-  '2x15': { label: '2×15 min', periods: 2, periodMin: 15, blockMin: 5, outfieldCount: 4 },
+  '3x15': { label: '3×15 min', periods: 3, periodMin: 15, outfieldCount: 4 },
+  '2x15': { label: '2×15 min', periods: 2, periodMin: 15, outfieldCount: 4 },
 };
-function fmt() { return FORMATS[S.format] || FORMATS['3x15']; }
+function fmt() { return {...(FORMATS[S.format] || FORMATS['3x15']), blockMin:S.changeInterval}; }
 function subsPerPeriod(f=fmt()) { return f.periodMin / f.blockMin; }
 function totalSlots() { const f = fmt(); return f.periods * subsPerPeriod(f); }
 function totalMatchMin() { const f = fmt(); return f.periods * f.periodMin; }
@@ -251,8 +253,11 @@ function loadPlayers() {
   if (!S.players.length) for (let i=0; i<8; i++) S.players.push(makePlayer());
   const savedFormat = localStorage.getItem('ms2-format');
   if (savedFormat && FORMATS[savedFormat]) S.format = savedFormat;
+  const savedInterval = Number(localStorage.getItem('ms2-interval'));
+  if ([3,5].includes(savedInterval)) S.changeInterval = savedInterval;
   savePlayers();
   renderSetupList();
+  renderIntervalToggle();
   renderFormatToggle();
   renderHistory();
 }
@@ -260,15 +265,32 @@ function loadPlayers() {
 function savePlayers() { localStorage.setItem('ms2-players', JSON.stringify(S.players)); }
 function makePlayer(name='', canGK=false) { return {id:newId(), name, canGK, active:true, returnPriority:false}; }
 
+function renderIntervalToggle() {
+  document.getElementById('interval-toggle').innerHTML = [3,5].map(minutes =>
+    `<button class="${S.changeInterval===minutes?'active':''}" onclick="setChangeInterval(${minutes})">${minutes} minuter</button>`
+  ).join('');
+}
+
+function intervalText(minutes) { return minutes===3 ? 'var tredje minut' : 'var femte minut'; }
+
 function renderFormatToggle() {
   document.getElementById('format-toggle').innerHTML = Object.keys(FORMATS).map(k =>
     `<button class="${S.format===k?'active':''}" onclick="setFormat('${k}')">${FORMATS[k].label}</button>`
   ).join('');
   const f = fmt();
   document.getElementById('format-rules').textContent =
-    `${f.periods} perioder à ${f.periodMin} minuter. Byten var ${f.blockMin}:e minut. `+
+    `${f.periods} perioder à ${f.periodMin} minuter. Byten sker ${intervalText(f.blockMin)} (${totalSlots()} bytestillfällen). `+
     `1 målvakt och ${f.outfieldCount} utespelare spelar. Målvakten står normalt hela perioden. `+
     `Den som väntat längst på bänken och spelare som återkommer från paus prioriteras.`;
+}
+
+function setChangeInterval(minutes) {
+  if (![3,5].includes(minutes)) return;
+  if (S.slots.length && minutes!==S.changeInterval) { alert('Spara eller avsluta den pågående matchen innan du ändrar bytesintervallet.'); return; }
+  S.changeInterval = minutes;
+  localStorage.setItem('ms2-interval', String(minutes));
+  renderIntervalToggle();
+  renderFormatToggle();
 }
 
 function setFormat(key) {
@@ -857,7 +879,7 @@ function setElapsedTime(totalSeconds) {
 function saveMatchState() {
   if (!S.slots.length) { localStorage.removeItem('ms2-match'); return; }
   localStorage.setItem('ms2-match', JSON.stringify({
-    version:2, matchId:S.matchId, matchName:S.matchName, format:S.format, slots:S.slots,
+    version:3, matchId:S.matchId, matchName:S.matchName, format:S.format, changeInterval:S.changeInterval, slots:S.slots,
     events:S.events, baseSeconds:S.baseSeconds, anchorStart:S.anchorStart, timerOn:S.timerOn,
   }));
 }
@@ -875,6 +897,7 @@ function loadMatchState() {
     const saved = JSON.parse(raw);
     if (!saved.slots || !saved.slots.length) return false;
     if (saved.format && FORMATS[saved.format]) S.format=saved.format;
+    S.changeInterval=[3,5].includes(Number(saved.changeInterval))?Number(saved.changeInterval):5;
     S.slots = saved.slots.map(migrateSlot);
     if (S.slots.length!==totalSlots() || S.slots.some(sl=>!sl.gk)) throw new Error('Ogiltigt sparat schema');
     S.matchId=saved.matchId||newId('match');
@@ -898,7 +921,7 @@ function renderHistory() {
   root.innerHTML=history.length?history.map(item=>`
     <div class="history-card">
       <div><div class="history-title">${esc(item.name||'Namnlös match')}</div>
-      <div class="history-meta">${esc(FORMATS[item.format]?.label||item.format)} · ${new Date(item.finishedAt).toLocaleDateString('sv-SE')}</div></div>
+      <div class="history-meta">${esc(FORMATS[item.format]?.label||item.format)} · byten ${item.changeInterval||5} min · ${new Date(item.finishedAt).toLocaleDateString('sv-SE')}</div></div>
       <button class="btn-sm btn-ghost" onclick="openHistory('${item.id}')">Visa</button>
     </div>`).join(''):`<div class="empty-note">Inga färdigspelade matcher sparade ännu.</div>`;
 }
@@ -908,9 +931,9 @@ function renderHistoryModal(title,sub,body){
   const item=loadHistory().find(x=>x.id===selectedHistoryId);
   if(!item){closeModal();return;}
   title.textContent=item.name||'Namnlös match';
-  sub.textContent=`${FORMATS[item.format]?.label||item.format} · sparad ${new Date(item.finishedAt).toLocaleString('sv-SE')}`;
+  sub.textContent=`${FORMATS[item.format]?.label||item.format} · byten ${item.changeInterval||5} min · sparad ${new Date(item.finishedAt).toLocaleString('sv-SE')}`;
   const mins={}, names={}; item.players.forEach(p=>{mins[p.id]=0;names[p.id]=p.name;});
-  const blockMin=FORMATS[item.format]?.blockMin||5;
+  const blockMin=[3,5].includes(Number(item.changeInterval))?Number(item.changeInterval):5;
   item.slots.forEach(sl=>{[sl.gk,...sl.on].forEach(id=>{if(id in mins)mins[id]+=blockMin;});});
   body.innerHTML=`<div class="section-label">Speltid</div>`+item.players.map(p=>`
     <div class="mitem"><span>${esc(p.name)}${p.canGK?' 🧤':''}</span><span class="badge">${mins[p.id]||0} min</span></div>`).join('')+
@@ -928,7 +951,7 @@ function finishMatch(){
   syncSeconds();
   if(!confirm(`Spara "${S.matchName||'Namnlös match'}" i matchhistoriken?`))return;
   if(S.timerOn){S.baseSeconds=elapsedSeconds();S.timerOn=false;S.anchorStart=null;clearInterval(S.timerRef);releaseWakeLock();}
-  const snapshot={id:S.matchId||newId('match'),name:S.matchName||'Namnlös match',format:S.format,
+  const snapshot={id:S.matchId||newId('match'),name:S.matchName||'Namnlös match',format:S.format,changeInterval:S.changeInterval,
     finishedAt:new Date().toISOString(),elapsedSeconds:S.baseSeconds,players:S.players.filter(p=>p.name.trim()).map(p=>({...p})),
     slots:S.slots.map(sl=>({...sl,on:[...sl.on],bench:[...sl.bench]})),events:S.events.map(e=>({...e}))};
   const history=loadHistory().filter(x=>x.id!==snapshot.id); history.unshift(snapshot); saveHistory(history);
@@ -980,7 +1003,7 @@ function showScreen(id) {
   document.getElementById('screen-'+id).classList.add('active');
   if(id==='setup'){
     document.getElementById('match-name-input').value=S.slots.length?S.matchName:'';
-    renderSetupList(); renderFormatToggle(); renderHistory();
+    renderSetupList(); renderIntervalToggle(); renderFormatToggle(); renderHistory();
   }
 }
 
@@ -989,6 +1012,7 @@ function showScreen(id) {
 // ══════════════════════════════════════════════
 loadPlayers();
 if (loadMatchState()) {
+  renderIntervalToggle();
   renderFormatToggle();
   showScreen('match');
   renderMatch();

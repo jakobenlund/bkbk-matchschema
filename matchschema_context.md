@@ -6,8 +6,8 @@
 
 Appen hjälper tränaren att:
 
-- skapa ett balanserat schema för 2×15 eller 3×15 minuter,
-- se vilka som spelar, står i mål och sitter på bänken i varje femminutersblock,
+- skapa ett balanserat schema för 2×15 eller 3×15 minuter med byten var tredje eller femte minut,
+- se vilka som spelar, står i mål och sitter på bänken i varje bytesblock,
 - göra direkta spelarbyten under ett pågående block,
 - pausa spelare som lämnar matchen tillfälligt,
 - ge en återvändande spelare hård prioritet vid nästa block,
@@ -22,15 +22,17 @@ Reglerna ligger samlade i `FORMATS`:
 
 ```javascript
 const FORMATS = {
-  '3x15': { label: '3×15 min', periods: 3, periodMin: 15, blockMin: 5, outfieldCount: 4 },
-  '2x15': { label: '2×15 min', periods: 2, periodMin: 15, blockMin: 5, outfieldCount: 4 },
+  '3x15': { label: '3×15 min', periods: 3, periodMin: 15, outfieldCount: 4 },
+  '2x15': { label: '2×15 min', periods: 2, periodMin: 15, outfieldCount: 4 },
 };
 ```
+
+Bytesintervallet lagras separat i `S.changeInterval` och är antingen 3 eller 5 minuter. `fmt()` kombinerar det valda formatet med bytesintervallet så att all schemaläggning och tidsvisning använder samma regel.
 
 Gemensamma regler:
 
 - En målvakt och fyra utespelare är på plan.
-- Byten planeras var femte minut.
+- Byten planeras var tredje eller femte minut enligt tränarens val.
 - Målvakten står normalt hela 15-minutersperioden.
 - Minst fem aktiva spelare krävs.
 - Minst en aktiv spelare måste vara markerad som målvaktskapabel.
@@ -38,10 +40,10 @@ Gemensamma regler:
 
 Format:
 
-- `3x15`: tre perioder, nio femminutersblock, totalt 45 minuter.
-- `2x15`: två perioder, sex femminutersblock, totalt 30 minuter.
+- `3x15`: tre perioder och totalt 45 minuter; 15 treminutersblock eller 9 femminutersblock.
+- `2x15`: två perioder och totalt 30 minuter; 10 treminutersblock eller 6 femminutersblock.
 
-Reglerna visas också direkt under formatväljaren i gränssnittet. En pågående match måste sparas eller avslutas innan formatet kan ändras.
+Reglerna visas också direkt under formatväljaren i gränssnittet. En pågående match måste sparas eller avslutas innan formatet eller bytesintervallet kan ändras. Äldre sparade matcher utan uppgift om bytesintervall tolkas som femminutersmatcher.
 
 ## Skärmar och arbetsflöde
 
@@ -52,9 +54,10 @@ På setup-skärmen kan tränaren:
 1. ange ett matchnamn,
 2. ange spelarnamn,
 3. markera spelare som kan vara målvakt,
-4. välja 2×15 eller 3×15,
-5. generera schemat,
-6. öppna tidigare sparade matcher.
+4. välja 3 eller 5 minuter mellan byten,
+5. välja 2×15 eller 3×15,
+6. generera schemat,
+7. öppna tidigare sparade matcher.
 
 Om matchnamnet lämnas tomt skapas ett namn baserat på dagens datum.
 
@@ -65,7 +68,7 @@ Matchskärmen innehåller:
 - matchnamn,
 - matchklocka,
 - manuell tidsjustering,
-- alla femminutersblock,
+- alla bytesblock,
 - färgkodade spelarchippar,
 - spelbalans,
 - spelarhantering,
@@ -155,7 +158,7 @@ Passerade block räknas aldrig om genom gränssnittet.
 
 ### Drag-and-drop-byte
 
-Spelarchippar kan dras till varandra inom samma aktuella eller framtida block. I det gröna aktuella blocket innebär detta ett direkt byte mitt i femminutersblocket. Följande block räknas om utifrån den nya situationen.
+Spelarchippar kan dras till varandra inom samma aktuella eller framtida block. I det gröna aktuella blocket innebär detta ett direkt byte mitt i det pågående bytesblocket. Följande block räknas om utifrån den nya situationen.
 
 - Passerade block är låsta.
 - Drag mellan olika block tillåts inte.
@@ -174,7 +177,7 @@ Dragfunktionen använder Pointer Events och fungerar med både touch och mus. CS
 - Senare block räknas om utan den pausade spelaren.
 - Minst fem aktiva spelare måste alltid återstå.
 
-Schemat arbetar i femminutersenheter. Ett byte mitt i ett block registreras som en händelse, men speltidsöversikten fördelar fortfarande hela blockets minuter enligt den slutliga blockuppställningen.
+Schemat arbetar i valda tre- eller femminutersenheter. Ett byte mitt i ett block registreras som en händelse, men speltidsöversikten fördelar fortfarande hela blockets minuter enligt den slutliga blockuppställningen.
 
 ### Återvändande spelare
 
@@ -201,7 +204,8 @@ Appen använder följande `localStorage`-nycklar:
 
 - `ms2-players`: spelarlistan och aktuell tillgänglighet,
 - `ms2-format`: senast valda format,
-- `ms2-match`: pågående match inklusive format, namn, timer, schema och händelser,
+- `ms2-interval`: senast valda bytesintervall,
+- `ms2-match`: pågående match inklusive format, bytesintervall, namn, timer, schema och händelser,
 - `ms2-history`: upp till 30 färdigspelade matcher.
 
 Viktiga konsekvenser:
@@ -218,7 +222,7 @@ Viktiga konsekvenser:
 - Användarinmatade namn HTML-escapas före rendering.
 - Målvaktsbyten valideras.
 - Passerade block är låsta.
-- Matchformat sparas tillsammans med den pågående matchen.
+- Matchformat och bytesintervall sparas tillsammans med den pågående matchen och historiken.
 - Äldre lokala data migreras vid inläsning.
 
 ## Tester
@@ -231,7 +235,7 @@ node tests/matchschema.test.js
 
 Testerna omfattar:
 
-- 2×15 och 3×15,
+- 2×15 och 3×15 med både 3- och 5-minutersintervall,
 - truppstorlekar 5–12,
 - korrekt antal block och fem spelare på plan,
 - unika spelare i varje block,
@@ -246,7 +250,7 @@ Testerna omfattar:
 
 ## Kända begränsningar
 
-- Speltidsbalansen arbetar i hela femminutersblock. Exakta delminuter från ett byte mitt i blocket visas inte i summeringen.
+- Speltidsbalansen arbetar i hela tre- eller femminutersblock. Exakta delminuter från ett byte mitt i blocket visas inte i summeringen.
 - Historiken är lokal och saknar molnsynkronisering/export.
 - Det finns ingen undo för manuella ändringar.
 - Ett drag som råkar pågå exakt när blockgränsen renderas om kan avbrytas.
