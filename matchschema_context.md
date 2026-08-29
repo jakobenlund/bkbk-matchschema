@@ -61,6 +61,13 @@ På setup-skärmen kan tränaren:
 
 Om matchnamnet lämnas tomt skapas ett namn baserat på dagens datum.
 
+Om tränaren går tillbaka till setup-skärmen medan ett schema pågår visas en särskild panel med:
+
+- `Tillbaka till pågående match`, som öppnar matchvyn igen utan att ändra schemat,
+- `Avsluta utan att spara`, som efter bekräftelse tar bort det pågående schemat men behåller spelarlistan.
+
+Knappen `Generera schema` döljs så länge en match pågår, så att schemat inte skrivs över av misstag.
+
 ### Match
 
 Matchskärmen innehåller:
@@ -242,6 +249,7 @@ Testerna omfattar:
 - målvaktskontinuitet inom perioder,
 - att föregående bänk går in när det är möjligt,
 - hård returprioritet,
+- återgång till samt kassering av en pågående match från setup-skärmen,
 - direkta byten i aktuellt block,
 - låsning av passerade block,
 - paus och återkomst,

@@ -146,6 +146,12 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
   </div>
   <h2>Matchnamn</h2>
   <input class="setup-input" id="match-name-input" type="text" maxlength="80" placeholder="T.ex. BKBK–Hammarby 24 augusti">
+  <div id="ongoing-match-actions" style="display:none;background:#fff;border-radius:10px;padding:12px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,.06)">
+    <div style="font-weight:650;margin-bottom:3px">Pågående match</div>
+    <div class="history-meta" id="ongoing-match-name" style="margin-bottom:10px"></div>
+    <button class="btn btn-primary" onclick="resumeMatch()">Tillbaka till pågående match</button>
+    <button class="btn bb-red" onclick="discardMatch()">Avsluta utan att spara</button>
+  </div>
   <div id="setup-list"></div>
   <button class="btn btn-ghost" style="margin-bottom:12px" onclick="addSetupRow()">+ Lägg till spelare</button>
   <h2>Minuter mellan byten</h2>
@@ -153,7 +159,7 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
   <h2>Matchformat</h2>
   <div class="seg" id="format-toggle"></div>
   <div class="rules-card" id="format-rules"></div>
-  <button class="btn btn-primary" onclick="onGenerate()">Generera schema →</button>
+  <button class="btn btn-primary" id="generate-button" onclick="onGenerate()">Generera schema →</button>
   <h2>Sparade matcher</h2>
   <div id="match-history"></div>
 </div>
@@ -259,6 +265,7 @@ function loadPlayers() {
   renderSetupList();
   renderIntervalToggle();
   renderFormatToggle();
+  renderSetupMatchActions();
   renderHistory();
 }
 
@@ -299,6 +306,34 @@ function setFormat(key) {
   S.format = key;
   localStorage.setItem('ms2-format', key);
   renderFormatToggle();
+}
+
+function renderSetupMatchActions() {
+  const ongoing = S.slots.length > 0;
+  document.getElementById('ongoing-match-actions').style.display = ongoing ? 'block' : 'none';
+  document.getElementById('generate-button').style.display = ongoing ? 'none' : 'block';
+  if (ongoing) document.getElementById('ongoing-match-name').textContent =
+    `${S.matchName || 'Namnlös match'} · ${FORMATS[S.format]?.label || S.format} · byten ${S.changeInterval} min`;
+}
+
+function resumeMatch() {
+  if (!S.slots.length) return;
+  showScreen('match');
+  renderMatch();
+}
+
+function discardMatch() {
+  if (!S.slots.length) return;
+  if (!confirm(`Avsluta "${S.matchName || 'Namnlös match'}" utan att spara? Schemat och alla byten tas bort.`)) return;
+  clearInterval(S.timerRef);
+  releaseWakeLock();
+  localStorage.removeItem('ms2-match');
+  S.slots=[]; S.events=[]; S.matchId=null; S.matchName='';
+  S.timerOn=false; S.seconds=0; S.baseSeconds=0; S.anchorStart=null; S.timerRef=null;
+  S.players.forEach(p=>{p.active=!!p.name.trim();p.returnPriority=false;});
+  savePlayers();
+  showScreen('setup');
+  showToast('Den pågående matchen avslutades utan att sparas.');
 }
 
 function renderSetupList() {
@@ -964,6 +999,7 @@ function finishMatch(){
 //  GENERATE & NAVIGATE
 // ══════════════════════════════════════════════
 function onGenerate() {
+  if (S.slots.length) { alert('Gå tillbaka till den pågående matchen eller avsluta den innan du skapar ett nytt schema.'); return; }
   const matchInput=document.getElementById('match-name-input');
   const named = S.players.filter(p=>p.name.trim()).length;
   if (named < 5) { alert('Ange minst 5 spelare.'); return; }
@@ -1003,7 +1039,7 @@ function showScreen(id) {
   document.getElementById('screen-'+id).classList.add('active');
   if(id==='setup'){
     document.getElementById('match-name-input').value=S.slots.length?S.matchName:'';
-    renderSetupList(); renderIntervalToggle(); renderFormatToggle(); renderHistory();
+    renderSetupList(); renderIntervalToggle(); renderFormatToggle(); renderSetupMatchActions(); renderHistory();
   }
 }
 

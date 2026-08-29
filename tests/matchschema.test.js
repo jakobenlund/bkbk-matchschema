@@ -41,6 +41,17 @@ evaluate('S.slots=[];setChangeInterval(3)');
 assert.equal(evaluate('S.changeInterval'),3);
 assert.equal(storage.get('ms2-interval'),'3');
 
+// Setup provides a safe way back to, or out of, an already generated match.
+schedule('3x15',8,3);
+evaluate("S.matchName='Ongoing test';saveMatchState();renderSetupMatchActions()");
+assert.equal(elements.get('ongoing-match-actions').style.display,'block');
+assert.equal(elements.get('generate-button').style.display,'none');
+evaluate('discardMatch()');
+assert.equal(evaluate('S.slots.length'),0);
+assert.equal(storage.has('ms2-match'),false);
+assert.equal(elements.get('ongoing-match-actions').style.display,'none');
+assert.equal(elements.get('generate-button').style.display,'block');
+
 for(const format of ['2x15','3x15']){
   for(const interval of [3,5]){
     const expectedSlots=(format==='2x15'?30:45)/interval;
