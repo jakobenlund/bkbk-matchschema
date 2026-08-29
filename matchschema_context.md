@@ -11,6 +11,7 @@ Appen hjälper tränaren att:
 - göra direkta spelarbyten under ett pågående block,
 - pausa spelare som lämnar matchen tillfälligt,
 - ge en återvändande spelare hård prioritet vid nästa block,
+- låta en spelare vila en eller två perioder utan att kompenseras med extra speltid senare,
 - köra och korrigera matchklockan,
 - namnge matcher och spara färdigspelade scheman i en lokal historik.
 
@@ -106,8 +107,8 @@ Historiken visar både planerad speltid och hela schemat. Sparade matcher kan ra
 
 ```javascript
 S = {
-  players: [{ id, name, canGK, active, returnPriority }],
-  slots: [{ startMin, period, sub, gk, on: [], bench: [] }],
+  players: [{ id, name, canGK, active, returnPriority, restPeriods: [] }],
+  slots: [{ startMin, period, sub, gk, on: [], bench: [], rest: [] }],
   timerOn,
   seconds,
   baseSeconds,
@@ -121,7 +122,7 @@ S = {
 };
 ```
 
-Alla hänvisningar i `gk`, `on`, `bench` och `events` är spelar-ID:n, inte namn. Det gör schemat robust mot specialtecken och senare namnändringar.
+Alla hänvisningar i `gk`, `on`, `bench`, `rest` och `events` är spelar-ID:n, inte namn. Det gör schemat robust mot specialtecken och senare namnändringar.
 
 `loadPlayers()` migrerar automatiskt äldre sparade spelare utan ID. `loadMatchState()` migrerar äldre scheman som refererar till spelarnamn. Ett ogiltigt eller inkompatibelt sparat schema tas bort i stället för att öppnas i ett blandat tillstånd.
 
@@ -185,6 +186,18 @@ Dragfunktionen använder Pointer Events och fungerar med både touch och mus. CS
 - Minst fem aktiva spelare måste alltid återstå.
 
 Schemat arbetar i valda tre- eller femminutersenheter. Ett byte mitt i ett block registreras som en händelse, men speltidsöversikten fördelar fortfarande hela blockets minuter enligt den slutliga blockuppställningen.
+
+### Vila/skadad
+
+`Vila/skadad` är avsiktligt skilt från vanlig paus:
+
+- Tränaren väljer via `Hantera` om spelaren ska vila resten av aktuell period eller aktuell och nästa period.
+- Spelaren tas bort från plan och bänk under viloperioderna och visas i en separat orange `vila/skadad`-rad i varje berört block.
+- Minst fem andra spelare och minst en annan MV-kapabel spelare måste vara tillgängliga i varje vald period.
+- När vilan är slut kommer spelaren automatiskt tillbaka i den vanliga rotationen utan `returnPriority`.
+- `Tillgänglig nu` kan avsluta vilan tidigare, fortfarande utan hård returprioritet.
+
+För schemaläggningens rättvisa får vilande spelare en intern neutral minutkredit som motsvarar de tillgängliga spelarnas genomsnittliga andel. Krediten visas inte som faktisk speltid. Därmed försöker algoritmen varken ta igen den missade tiden eller straffa spelaren ytterligare efter vilan; den faktiska totalsumman blir lägre och den fortsatta rotationen blir normal.
 
 ### Återvändande spelare
 
@@ -253,6 +266,7 @@ Testerna omfattar:
 - direkta byten i aktuellt block,
 - låsning av passerade block,
 - paus och återkomst,
+- vila/skadad under en eller två perioder, automatisk normal återkomst och avslut i förtid,
 - sparning och återläsning av format och matchnamn,
 - sparning av färdig match i historiken.
 

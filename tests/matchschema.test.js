@@ -77,6 +77,34 @@ for(const format of ['2x15','3x15']){
   }
 }
 
+// Rest/injured scheduling remains valid for every format, interval and viable squad size.
+for(const format of ['2x15','3x15']){
+  for(const interval of [3,5]){
+    for(let count=6;count<=12;count++){
+      for(let run=0;run<20;run++){
+        schedule(format,count,interval);
+        evaluate('S.baseSeconds=0;S.seconds=0');
+        const id=evaluate('S.slots[0].on[0]');
+        const periodCount=format==='3x15'?2:1;
+        assert.equal(evaluate(`setPlayerRest('${id}',${periodCount})`),true);
+        const slots=JSON.parse(evaluate('JSON.stringify(S.slots)'));
+        for(const slot of slots){
+          const all=[slot.gk,...slot.on,...slot.bench,...slot.rest];
+          assert.equal(new Set(all).size,count);
+          assert.equal(new Set([slot.gk,...slot.on]).size,5);
+          if(slot.period<periodCount)assert(slot.rest.includes(id));
+        }
+      }
+    }
+  }
+}
+
+// A rest is rejected if fewer than five other players would remain.
+schedule('2x15',5,5);
+const unavailableRestId=evaluate('S.slots[0].on[0]');
+assert.equal(evaluate(`setPlayerRest('${unavailableRestId}',1)`),false);
+assert(!evaluate(`S.slots.some(sl=>(sl.rest||[]).includes('${unavailableRestId}'))`));
+
 // A returning outfield player receives hard priority in the next block.
 schedule('3x15',8);
 evaluate("S.players.find(p=>p.id==='p7').returnPriority=true; recalcFrom(1)");
@@ -110,6 +138,31 @@ assert.equal(evaluate(`[S.slots[0].gk,...S.slots[0].on].length`),5);
 assert(!evaluate(`S.slots.slice(1).some(sl=>[sl.gk,...sl.on, ...sl.bench].includes('${pausedId}'))`));
 evaluate(`returnPlayer('${pausedId}')`);
 assert(evaluate(`[S.slots[1].gk,...S.slots[1].on].includes('${pausedId}')`));
+
+// Rest/injured excludes a player for whole periods and returns them without priority.
+schedule('3x15',8,5);
+evaluate('S.baseSeconds=60;S.seconds=60');
+const restingId=evaluate('S.slots[0].on[0]');
+assert.equal(evaluate(`setPlayerRest('${restingId}',2)`),true);
+const restedSlots=JSON.parse(evaluate('JSON.stringify(S.slots)'));
+for(const slot of restedSlots.filter(sl=>sl.period<2)){
+  assert(slot.rest.includes(restingId));
+  assert(![slot.gk,...slot.on,...slot.bench].includes(restingId));
+}
+for(const slot of restedSlots.filter(sl=>sl.period===2)){
+  assert(!slot.rest.includes(restingId));
+  assert([slot.gk,...slot.on,...slot.bench].includes(restingId));
+}
+assert.equal(evaluate(`playerById('${restingId}').returnPriority`),false);
+const restedMinutes=evaluate(`S.slots.reduce((sum,sl)=>sum+([sl.gk,...sl.on].includes('${restingId}')?fmt().blockMin:0),0)`);
+assert(restedMinutes>=5&&restedMinutes<=15);
+evaluate("S.matchId='rest-persistence';S.matchName='Rest test';saveMatchState();S.slots=[];loadMatchState()");
+assert(evaluate(`S.slots[0].rest.includes('${restingId}')`));
+
+// A rest can be ended early, still without activating hard return priority.
+evaluate(`endPlayerRest('${restingId}')`);
+assert(!evaluate(`S.slots.some(sl=>(sl.rest||[]).includes('${restingId}'))`));
+assert.equal(evaluate(`playerById('${restingId}').returnPriority`),false);
 
 // Finishing creates a history snapshot and clears only the in-progress match.
 evaluate("S.matchId='history-test';S.matchName='History test';S.baseSeconds=1800;finishMatch()");

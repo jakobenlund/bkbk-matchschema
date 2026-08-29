@@ -36,6 +36,7 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
 .row label{font-size:13px;color:#64748b;display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer}
 .row input[type=checkbox]{width:17px;height:17px;cursor:pointer;accent-color:var(--bkbk-green)}
 .btn-x{background:none;border:none;font-size:20px;color:#cbd5e0;cursor:pointer;padding:0 2px;line-height:1}
+.rest-chip{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:#ffedd5;color:#9a3412;font-size:13px;font-weight:600}
 .setup-input{width:100%;padding:12px;border:1.5px solid #dbe3ec;border-radius:10px;background:#fff;font-size:15px;outline:none}
 .setup-input:focus{border-color:var(--bkbk-green)}
 .rules-card{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:11px 12px;font-size:13px;line-height:1.45;color:#166534;margin:8px 0 14px}
@@ -209,8 +210,8 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
 //  STATE
 // ══════════════════════════════════════════════
 const S = {
-  players: [], // [{id,name,canGK,active,returnPriority}]
-  slots: [],   // [{startMin,period,sub,gk,on[],bench[]}], all player references are IDs
+  players: [], // [{id,name,canGK,active,returnPriority,restPeriods[]}]
+  slots: [],   // [{startMin,period,sub,gk,on[],bench[],rest[]}], all player references are IDs
   timerOn: false, seconds: 0, baseSeconds: 0, anchorStart: null, timerRef: null,
   balanceOpen: true, format: '3x15', changeInterval: 5, matchId: null, matchName: '', events: [],
 };
@@ -255,6 +256,7 @@ function loadPlayers() {
   S.players = S.players.map(p => ({
     id: p.id || newId(), name: String(p.name || ''), canGK: !!p.canGK,
     active: p.active !== false, returnPriority: !!p.returnPriority,
+    restPeriods: Array.isArray(p.restPeriods) ? p.restPeriods.filter(n=>Number.isInteger(n)&&n>=0&&n<3) : [],
   }));
   if (!S.players.length) for (let i=0; i<8; i++) S.players.push(makePlayer());
   const savedFormat = localStorage.getItem('ms2-format');
@@ -270,7 +272,7 @@ function loadPlayers() {
 }
 
 function savePlayers() { localStorage.setItem('ms2-players', JSON.stringify(S.players)); }
-function makePlayer(name='', canGK=false) { return {id:newId(), name, canGK, active:true, returnPriority:false}; }
+function makePlayer(name='', canGK=false) { return {id:newId(), name, canGK, active:true, returnPriority:false, restPeriods:[]}; }
 
 function renderIntervalToggle() {
   document.getElementById('interval-toggle').innerHTML = [3,5].map(minutes =>
@@ -330,7 +332,7 @@ function discardMatch() {
   localStorage.removeItem('ms2-match');
   S.slots=[]; S.events=[]; S.matchId=null; S.matchName='';
   S.timerOn=false; S.seconds=0; S.baseSeconds=0; S.anchorStart=null; S.timerRef=null;
-  S.players.forEach(p=>{p.active=!!p.name.trim();p.returnPriority=false;});
+  S.players.forEach(p=>{p.active=!!p.name.trim();p.returnPriority=false;p.restPeriods=[];});
   savePlayers();
   showScreen('setup');
   showToast('Den pågående matchen avslutades utan att sparas.');
@@ -360,6 +362,18 @@ function activePlayers() {
   return S.players.filter(p => p.active && p.name.trim());
 }
 
+function isRestingInPeriod(player, period) {
+  return (player.restPeriods || []).includes(period);
+}
+
+function availablePlayers(period) {
+  return activePlayers().filter(p=>!isRestingInPeriod(p,period));
+}
+
+function neutralRestCredit(blockMin, availableCount) {
+  return availableCount ? blockMin * 5 / availableCount : 0;
+}
+
 function pickGK(capable, used, mins) {
   return shuffleArr([...capable]).sort((a,b) =>
     (used[a]||0)-(used[b]||0) || (mins[a]||0)-(mins[b]||0)
@@ -369,30 +383,33 @@ function pickGK(capable, used, mins) {
 function buildSchedule() {
   const players = activePlayers();
   if (players.length < 5) { alert('Minst 5 aktiva spelare krävs.'); return false; }
-  const gkCapable = players.filter(p=>p.canGK).map(p=>p.id);
-  if (!gkCapable.length) { alert('Minst en spelare måste kunna vara MV.'); return false; }
-
   const f = fmt();
   const mins = {};
   players.forEach(p => mins[p.id] = 0);
   const gkUsed = {};
-  gkCapable.forEach(n => gkUsed[n] = 0);
+  players.filter(p=>p.canGK).forEach(p => gkUsed[p.id] = 0);
 
   S.slots = [];
   const benchStreak = Object.fromEntries(players.map(p=>[p.id,0]));
   const priority = new Set(players.filter(p=>p.returnPriority).map(p=>p.id));
   for (let period=0; period<f.periods; period++) {
+    const available = players.filter(p=>!isRestingInPeriod(p,period));
+    const rest = players.filter(p=>isRestingInPeriod(p,period)).map(p=>p.id);
+    if (available.length < 5) { alert(`Minst 5 spelare måste vara tillgängliga i period ${period+1}.`); return false; }
+    const gkCapable = available.filter(p=>p.canGK).map(p=>p.id);
+    if (!gkCapable.length) { alert(`Minst en målvakt måste vara tillgänglig i period ${period+1}.`); return false; }
     const gk = pickGK(gkCapable, gkUsed, mins);
     gkUsed[gk]++;
     priority.delete(gk);
     benchStreak[gk]=0;
-    const outfield = players.map(p=>p.id).filter(id=>id!==gk);
+    const outfield = available.map(p=>p.id).filter(id=>id!==gk);
     for (let sub=0; sub<subsPerPeriod(f); sub++) {
       const ranked = rankOutfield(outfield, mins, benchStreak, priority);
       const on = ranked.slice(0,f.outfieldCount), bench = ranked.slice(f.outfieldCount);
-      S.slots.push({startMin:period*f.periodMin+sub*f.blockMin,period,sub,gk,on:[...on],bench:[...bench]});
+      S.slots.push({startMin:period*f.periodMin+sub*f.blockMin,period,sub,gk,on:[...on],bench:[...bench],rest:[...rest]});
       on.forEach(id => { mins[id]+=f.blockMin; benchStreak[id]=0; priority.delete(id); });
       bench.forEach(id => benchStreak[id]=(benchStreak[id]||0)+1);
+      rest.forEach(id => { mins[id]+=neutralRestCredit(f.blockMin,available.length); benchStreak[id]=0; });
     }
     mins[gk] += f.periodMin;
   }
@@ -425,11 +442,12 @@ function recalcFrom(from) {
   const total = totalSlots();
   if (from >= total) return;
   const players = activePlayers();
-  if (players.length < 5) return;
-  const gkCapable = players.filter(p=>p.canGK).map(p=>p.id);
-  if (!gkCapable.length) return;
+  if (players.length < 5) return false;
 
-  // Accumulate minutes from slots 0..from-1
+  // Accumulate effective rotation minutes from slots 0..from-1. Rest time is
+  // included here only for scheduling fairness, never in the displayed playing
+  // time. The neutral credit matches the available players' average share, so a
+  // resting player is neither compensated nor additionally penalised later.
   const mins = {};
   players.forEach(p => mins[p.id] = 0);
   const benchStreak = Object.fromEntries(players.map(p=>[p.id,0]));
@@ -438,11 +456,13 @@ function recalcFrom(from) {
     sl.on.forEach(id => { if(id in mins) { mins[id]+=f.blockMin; benchStreak[id]=0; } });
     if(sl.gk in mins) { mins[sl.gk]+=f.blockMin; benchStreak[sl.gk]=0; }
     sl.bench.forEach(id => { if(id in benchStreak) benchStreak[id]++; });
+    const availableCount=1+sl.on.length+sl.bench.length;
+    (sl.rest||[]).forEach(id => { if(id in mins) { mins[id]+=neutralRestCredit(f.blockMin,availableCount); benchStreak[id]=0; } });
   }
 
   // Count how many periods each player has served as GK (period starts before `from`)
   const gkUsed = {};
-  gkCapable.forEach(n => gkUsed[n] = 0);
+  players.filter(p=>p.canGK).forEach(p => gkUsed[p.id] = 0);
   const spp = subsPerPeriod(f);
   for (let period=0; period < Math.floor(from/spp); period++) {
     const gk = S.slots[period*spp].gk;
@@ -456,46 +476,37 @@ function recalcFrom(from) {
     if (gk in gkUsed) gkUsed[gk]++;
   }
 
-  // Determine GK for the ongoing period (if mid-period, keep it)
-  let periodGK = fromSub !== 0 && gkCapable.includes(S.slots[from-1].gk) ? S.slots[from-1].gk : null;
-  let currentPeriod = fromPeriod;
+  // Determine GK for the ongoing period (if mid-period and still available, keep it).
+  const firstAvailableGK = availablePlayers(fromPeriod).filter(p=>p.canGK).map(p=>p.id);
+  let periodGK = fromSub !== 0 && firstAvailableGK.includes(S.slots[from-1].gk) ? S.slots[from-1].gk : null;
   const priority = new Set(players.filter(p=>p.returnPriority).map(p=>p.id));
 
   for (let i=from; i<total; i++) {
     const period = Math.floor(i/spp), sub = i % spp;
+    const available = players.filter(p=>!isRestingInPeriod(p,period));
+    const rest = players.filter(p=>isRestingInPeriod(p,period)).map(p=>p.id);
+    if (available.length < 5) return false;
+    const gkCapable = available.filter(p=>p.canGK).map(p=>p.id);
+    if (!gkCapable.length) return false;
 
-    let gk;
-    if (sub === 0 && period !== currentPeriod) {
-      // New period
-      gk = pickGK(gkCapable, gkUsed, mins);
-      gkUsed[gk]++;
-      periodGK = gk;
-      currentPeriod = period;
-    } else if (sub === 0 && i === from) {
-      // First recalculated slot IS a period start
-      gk = pickGK(gkCapable, gkUsed, mins);
-      gkUsed[gk]++;
-      periodGK = gk;
-    } else if (periodGK) {
-      // Continue same period's GK
-      gk = periodGK;
-    } else {
-      gk = pickGK(gkCapable, gkUsed, mins);
-      gkUsed[gk]++;
-      periodGK = gk;
+    if (sub === 0 || !periodGK || !gkCapable.includes(periodGK)) {
+      periodGK = pickGK(gkCapable, gkUsed, mins);
+      gkUsed[periodGK]=(gkUsed[periodGK]||0)+1;
     }
+    const gk = periodGK;
 
     priority.delete(gk);
     benchStreak[gk]=0;
-    const outfield = players.map(p=>p.id).filter(id=>id!==gk);
+    const outfield = available.map(p=>p.id).filter(id=>id!==gk);
     const ranked = rankOutfield(outfield, mins, benchStreak, priority);
     const on = ranked.slice(0, Math.min(f.outfieldCount,outfield.length));
     const bench = ranked.slice(f.outfieldCount);
 
-    S.slots[i] = {startMin:period*f.periodMin+sub*f.blockMin,period,sub,gk,on:[...on],bench:[...bench]};
+    S.slots[i] = {startMin:period*f.periodMin+sub*f.blockMin,period,sub,gk,on:[...on],bench:[...bench],rest:[...rest]};
     on.forEach(id => { if(id in mins) mins[id]+=f.blockMin; benchStreak[id]=0; priority.delete(id); });
     if (gk in mins) { mins[gk]+=f.blockMin; benchStreak[gk]=0; }
     bench.forEach(id => { if(id in benchStreak) benchStreak[id]++; });
+    rest.forEach(id => { if(id in mins) { mins[id]+=neutralRestCredit(f.blockMin,available.length); benchStreak[id]=0; } });
   }
   return true;
 }
@@ -554,6 +565,10 @@ function renderMatch() {
         ${sl.bench.length ? `<div class="chip-row">
           <span class="bench-label">bänk</span>
           ${sl.bench.map(id=>`<span class="chip ${pfx}bench" data-slot="${i}" data-id="${id}">${esc(playerName(id))}</span>`).join('')}
+        </div>` : ''}
+        ${(sl.rest||[]).length ? `<div class="chip-row">
+          <span class="bench-label">vila/skadad</span>
+          ${(sl.rest||[]).map(id=>`<span class="rest-chip">${esc(playerName(id))}</span>`).join('')}
         </div>` : ''}
       </div>
     </div>`;
@@ -727,13 +742,15 @@ function openModal(type) {
 
   else if (type === 'manage') {
     title.textContent = '✎ Hantera spelare';
-    sub.textContent = 'Pausa direkt eller låt en spelare återkomma med prioritet i nästa block.';
+    sub.textContent = 'Paus ger returprioritet. Vila/skadad minskar speltiden utan senare kompensation.';
     const named = S.players.filter(p=>p.name.trim());
     body.innerHTML = `<button class="btn btn-primary" onclick="openModal('add')">+ Lägg till spelare</button>` + named.map(p=>`
       <div class="mitem bench-item" style="justify-content:space-between">
-        <span>${esc(p.name)}${p.canGK?' 🧤':''}${p.returnPriority?' ⭐':''}</span>
-        ${p.active
-          ? `<button class="btn-sm bb-red" style="border:none" onclick="pausePlayer('${p.id}')">Pausa</button>`
+        <span>${esc(p.name)}${p.canGK?' 🧤':''}${p.returnPriority?' ⭐':''}${restStatus(p)?`<small style="display:block;color:#c2410c">${esc(restStatus(p))}</small>`:''}</span>
+        ${p.active && restStatus(p)
+          ? `<button class="btn-sm btn-ghost" style="border:none" onclick="endPlayerRest('${p.id}')">Tillgänglig nu</button>`
+          : p.active
+          ? `<span style="display:flex;gap:5px"><button class="btn-sm btn-ghost" style="border:none" onclick="openRestOptions('${p.id}')">Vila/skadad</button><button class="btn-sm bb-red" style="border:none" onclick="pausePlayer('${p.id}')">Pausa</button></span>`
           : `<button class="btn-sm btn-primary" onclick="returnPlayer('${p.id}')">Kom tillbaka</button>`}
       </div>`).join('');
   }
@@ -743,12 +760,62 @@ function openModal(type) {
   document.getElementById('modal-bg').classList.add('open');
 }
 
+function restStatus(player) {
+  if (!S.slots.length) return '';
+  const currentPeriod=(S.slots[currentSlotIdx()]||S.slots[0]).period;
+  const periods=(player.restPeriods||[]).filter(p=>p>=currentPeriod&&p<fmt().periods).sort((a,b)=>a-b);
+  if (!periods.length) return '';
+  return periods.length===1 ? `Vila/skadad period ${periods[0]+1}` : `Vila/skadad period ${periods[0]+1}–${periods[periods.length-1]+1}`;
+}
+
+function openRestOptions(id) {
+  const p=playerById(id); if(!p||!p.active)return;
+  const currentPeriod=(S.slots[currentSlotIdx()]||S.slots[0]).period;
+  const remaining=fmt().periods-currentPeriod;
+  const title=document.getElementById('modal-title');
+  const sub=document.getElementById('modal-sub');
+  const body=document.getElementById('modal-body');
+  title.textContent=`Vila/skadad: ${p.name}`;
+  sub.textContent='Vilotiden räknas inte som bänktid och ger ingen extra prioritet senare.';
+  body.innerHTML=`<button class="btn btn-ghost" onclick="setPlayerRest('${id}',1)">Resten av period ${currentPeriod+1}</button>`+
+    (remaining>=2?`<button class="btn btn-ghost" onclick="setPlayerRest('${id}',2)">Period ${currentPeriod+1}–${currentPeriod+2}</button>`:'');
+}
+
+function setPlayerRest(id, periodCount) {
+  const p=playerById(id); if(!p||!p.active||!S.slots.length)return false;
+  const cur=currentSlotIdx(), currentPeriod=S.slots[cur].period;
+  const periods=Array.from({length:Math.min(periodCount,fmt().periods-currentPeriod)},(_,i)=>currentPeriod+i);
+  for (const period of periods) {
+    const available=activePlayers().filter(candidate=>candidate.id!==id&&!isRestingInPeriod(candidate,period));
+    if(available.length<5){alert(`Minst fem spelare måste vara tillgängliga i period ${period+1}.`);return false;}
+    if(!available.some(candidate=>candidate.canGK)){alert(`Ingen annan målvakt är tillgänglig i period ${period+1}.`);return false;}
+  }
+  const previous=[...(p.restPeriods||[])];
+  p.restPeriods=[...new Set([...previous,...periods])].sort((a,b)=>a-b);
+  p.returnPriority=false;
+  if(recalcFrom(cur)===false){p.restPeriods=previous;recalcFrom(cur);return false;}
+  S.events.push({type:'rest',at:elapsedSeconds(),playerId:id,periods:[...periods]});
+  savePlayers(); closeModal(); renderMatch();
+  showToast(`${p.name} är markerad vila/skadad utan kompensationstid.`);
+  return true;
+}
+
+function endPlayerRest(id) {
+  const p=playerById(id); if(!p||!S.slots.length)return;
+  const cur=currentSlotIdx(), currentPeriod=S.slots[cur].period;
+  p.restPeriods=(p.restPeriods||[]).filter(period=>period<currentPeriod);
+  p.returnPriority=false;
+  S.events.push({type:'rest-end',at:elapsedSeconds(),playerId:id});
+  savePlayers(); recalcFrom(cur); closeModal(); renderMatch();
+  showToast(`${p.name} är tillgänglig i den vanliga rotationen.`);
+}
+
 function addMidMatch() {
   const name = document.getElementById('new-name').value.trim();
   if (!name) return;
   const canGK = document.getElementById('new-gk').checked;
   const existing = S.players.find(p=>p.name.trim().toLocaleLowerCase()===name.toLocaleLowerCase());
-  if (existing) { existing.active=true; existing.canGK=canGK; existing.returnPriority=true; }
+  if (existing) { existing.active=true; existing.canGK=canGK; existing.returnPriority=true; existing.restPeriods=[]; }
   else { const p=makePlayer(name,canGK); p.returnPriority=true; S.players.push(p); }
   savePlayers();
   recalcFrom(Math.min(currentSlotIdx()+1,totalSlots()));
@@ -788,7 +855,7 @@ function pausePlayer(id) {
 
 function returnPlayer(id) {
   const p=playerById(id); if(!p)return;
-  p.active=true; p.returnPriority=true;
+  p.active=true; p.returnPriority=true; p.restPeriods=[];
   S.events.push({type:'return',at:elapsedSeconds(),playerId:id});
   savePlayers(); recalcFrom(Math.min(currentSlotIdx()+1,totalSlots())); closeModal(); renderMatch();
   showToast(`${p.name} prioriteras i nästa block.`);
@@ -914,7 +981,7 @@ function setElapsedTime(totalSeconds) {
 function saveMatchState() {
   if (!S.slots.length) { localStorage.removeItem('ms2-match'); return; }
   localStorage.setItem('ms2-match', JSON.stringify({
-    version:3, matchId:S.matchId, matchName:S.matchName, format:S.format, changeInterval:S.changeInterval, slots:S.slots,
+    version:4, matchId:S.matchId, matchName:S.matchName, format:S.format, changeInterval:S.changeInterval, slots:S.slots,
     events:S.events, baseSeconds:S.baseSeconds, anchorStart:S.anchorStart, timerOn:S.timerOn,
   }));
 }
@@ -922,7 +989,7 @@ function saveMatchState() {
 function migrateSlot(slot) {
   const nameToId=name=>S.players.find(p=>p.name===name)?.id;
   const convert=value=>playerById(value)?value:nameToId(value);
-  return {...slot,gk:convert(slot.gk),on:(slot.on||[]).map(convert).filter(Boolean),bench:(slot.bench||[]).map(convert).filter(Boolean)};
+  return {...slot,gk:convert(slot.gk),on:(slot.on||[]).map(convert).filter(Boolean),bench:(slot.bench||[]).map(convert).filter(Boolean),rest:(slot.rest||[]).map(convert).filter(Boolean)};
 }
 
 function loadMatchState() {
@@ -974,7 +1041,7 @@ function renderHistoryModal(title,sub,body){
     <div class="mitem"><span>${esc(p.name)}${p.canGK?' 🧤':''}</span><span class="badge">${mins[p.id]||0} min</span></div>`).join('')+
     `<div class="section-label">Schema</div>`+item.slots.map(sl=>`
       <div class="mitem" style="display:block;cursor:default"><div>${sl.startMin}–${sl.startMin+blockMin} min · MV ${esc(names[sl.gk]||'Okänd')}</div>
-      <div class="history-meta">Plan: ${sl.on.map(id=>esc(names[id]||'Okänd')).join(', ')}${sl.bench.length?` · Bänk: ${sl.bench.map(id=>esc(names[id]||'Okänd')).join(', ')}`:''}</div></div>`).join('')+
+      <div class="history-meta">Plan: ${sl.on.map(id=>esc(names[id]||'Okänd')).join(', ')}${sl.bench.length?` · Bänk: ${sl.bench.map(id=>esc(names[id]||'Okänd')).join(', ')}`:''}${(sl.rest||[]).length?` · Vila/skadad: ${(sl.rest||[]).map(id=>esc(names[id]||'Okänd')).join(', ')}`:''}</div></div>`).join('')+
     `<button class="btn bb-red" onclick="deleteHistory('${item.id}')">Radera sparad match</button>`;
 }
 function deleteHistory(id){
@@ -988,10 +1055,10 @@ function finishMatch(){
   if(S.timerOn){S.baseSeconds=elapsedSeconds();S.timerOn=false;S.anchorStart=null;clearInterval(S.timerRef);releaseWakeLock();}
   const snapshot={id:S.matchId||newId('match'),name:S.matchName||'Namnlös match',format:S.format,changeInterval:S.changeInterval,
     finishedAt:new Date().toISOString(),elapsedSeconds:S.baseSeconds,players:S.players.filter(p=>p.name.trim()).map(p=>({...p})),
-    slots:S.slots.map(sl=>({...sl,on:[...sl.on],bench:[...sl.bench]})),events:S.events.map(e=>({...e}))};
+    slots:S.slots.map(sl=>({...sl,on:[...sl.on],bench:[...sl.bench],rest:[...(sl.rest||[])]})),events:S.events.map(e=>({...e}))};
   const history=loadHistory().filter(x=>x.id!==snapshot.id); history.unshift(snapshot); saveHistory(history);
   localStorage.removeItem('ms2-match'); S.slots=[]; S.events=[]; S.matchId=null;
-  S.players.forEach(p=>{p.active=!!p.name.trim();p.returnPriority=false;}); savePlayers();
+  S.players.forEach(p=>{p.active=!!p.name.trim();p.returnPriority=false;p.restPeriods=[];}); savePlayers();
   showScreen('setup'); renderHistory(); showToast('Matchen har sparats i historiken.');
 }
 
@@ -1006,8 +1073,7 @@ function onGenerate() {
   const normalized=S.players.filter(p=>p.name.trim()).map(p=>p.name.trim().toLocaleLowerCase());
   if(new Set(normalized).size!==normalized.length){alert('Spelarnamnen måste vara unika.');return;}
   if(!S.players.some(p=>p.name.trim()&&p.canGK)){alert('Minst en spelare måste kunna vara MV.');return;}
-  S.players.forEach(p => p.active = !!p.name.trim());
-  S.players.forEach(p=>p.returnPriority=false);
+  S.players.forEach(p => { p.active=!!p.name.trim(); p.returnPriority=false; p.restPeriods=[]; });
   S.matchName=matchInput.value.trim()||`Match ${new Date().toLocaleDateString('sv-SE')}`;
   S.matchId=newId('match'); S.events=[];
   savePlayers();
