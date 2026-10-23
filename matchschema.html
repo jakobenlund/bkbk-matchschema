@@ -31,8 +31,8 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
 .brand-motto{font-size:11.5px;font-weight:700;color:var(--bkbk-green-dark);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
 
 /* ── SETUP ── */
-.row{display:flex;align-items:center;gap:10px;background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
-.row input[type=text]{flex:1;border:none;font-size:15px;outline:none;background:transparent}
+.row{display:flex;align-items:center;gap:6px;background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.row input[type=text]{flex:1;min-width:0;border:none;font-size:15px;outline:none;background:transparent}
 .row label{font-size:13px;color:#64748b;display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer}
 .row input[type=checkbox]{width:17px;height:17px;cursor:pointer;accent-color:var(--bkbk-green)}
 .btn-x{background:none;border:none;font-size:20px;color:#cbd5e0;cursor:pointer;padding:0 2px;line-height:1}
@@ -153,6 +153,7 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
     <button class="btn btn-primary" onclick="resumeMatch()">Tillbaka till pågående match</button>
     <button class="btn bb-red" onclick="discardMatch()">Avsluta utan att spara</button>
   </div>
+  <div id="position-toggle"></div>
   <div id="setup-list"></div>
   <button class="btn btn-ghost" style="margin-bottom:12px" onclick="addSetupRow()">+ Lägg till spelare</button>
   <h2>Minuter mellan byten</h2>
@@ -160,8 +161,10 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
   <h2>Matchformat</h2>
   <div class="seg" id="format-toggle"></div>
   <div class="rules-card" id="format-rules"></div>
+  <div id="cup-settings"></div>
   <button class="btn btn-primary" id="generate-button" onclick="onGenerate()">Generera schema →</button>
   <h2>Sparade matcher</h2>
+  <button class="btn btn-ghost" onclick="openCupSummary()">Visa cupsummering</button>
   <div id="match-history"></div>
 </div>
 
@@ -180,7 +183,9 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
   </div>
 
   <div class="drag-hint">Dra spelare inom aktuellt block för ett direkt byte. Passerade block är låsta.</div>
+  <div id="cup-match-controls"></div>
   <div id="match-slots"></div>
+  <div id="cup-totals"></div>
 
   <h2 style="cursor:pointer" onclick="toggleBalance()">Spelbalans ▾</h2>
   <div class="card" id="balance-panel" style="background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.06)"></div>
@@ -210,6 +215,7 @@ h2{font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-
 //  STATE
 // ══════════════════════════════════════════════
 const S = {
+  cup: {id:null, positions:false, roles:{}, gk:null, totals:{}, matches:0},
   players: [], // [{id,name,canGK,active,returnPriority,restPeriods[]}]
   slots: [],   // [{startMin,period,sub,gk,on[],bench[],rest[]}], all player references are IDs
   timerOn: false, seconds: 0, baseSeconds: 0, anchorStart: null, timerRef: null,
@@ -230,21 +236,36 @@ function playerName(id) { return playerById(id)?.name || 'Okänd spelare'; }
 // en siffra varje sekund. En bakgrundad/låst mobil struper setInterval, men
 // eftersom S.seconds alltid räknas ut på nytt från anchorStart hämtar den
 // automatiskt in rätt tid så fort sidan blir synlig igen — ingen "drift".
-function elapsedSeconds() {
-  if (S.timerOn && S.anchorStart != null) {
-    return S.baseSeconds + Math.floor((Date.now() - S.anchorStart) / 1000);
-  }
-  return S.baseSeconds;
+function timerStopSeconds() {
+  const periodSeconds=fmt().periodMin*60;
+  return Math.min(totalMatchMin()*60,(Math.floor(S.baseSeconds/periodSeconds)+1)*periodSeconds);
 }
-function syncSeconds() { S.seconds = elapsedSeconds(); }
+function elapsedSeconds() {
+  const raw=S.timerOn && S.anchorStart!=null
+    ? S.baseSeconds+Math.max(0,Math.floor((Date.now()-S.anchorStart)/1000)) : S.baseSeconds;
+  return Math.min(raw,S.timerOn?timerStopSeconds():totalMatchMin()*60);
+}
+function stopTimerAt(seconds) {
+  S.baseSeconds=seconds;S.seconds=seconds;S.timerOn=false;S.anchorStart=null;
+  clearInterval(S.timerRef);S.timerRef=null;releaseWakeLock();
+}
+function syncSeconds() {
+  const limit=timerStopSeconds();
+  S.seconds=elapsedSeconds();
+  if(S.timerOn && S.seconds>=limit) {
+    stopTimerAt(limit);
+    saveMatchState();
+  }
+}
 
 // All scheduling rules live here so that the two formats cannot silently diverge.
 const FORMATS = {
+  '1x25': { label: '1×25 min (cup)', periods: 1, periodMin: 25, outfieldCount: 4 },
   '3x15': { label: '3×15 min', periods: 3, periodMin: 15, outfieldCount: 4 },
   '2x15': { label: '2×15 min', periods: 2, periodMin: 15, outfieldCount: 4 },
 };
 function fmt() { return {...(FORMATS[S.format] || FORMATS['3x15']), blockMin:S.changeInterval}; }
-function subsPerPeriod(f=fmt()) { return f.periodMin / f.blockMin; }
+function subsPerPeriod(f=fmt()) { return Math.ceil(f.periodMin / f.blockMin); }
 function totalSlots() { const f = fmt(); return f.periods * subsPerPeriod(f); }
 function totalMatchMin() { const f = fmt(); return f.periods * f.periodMin; }
 
@@ -255,6 +276,7 @@ function loadPlayers() {
   try { S.players = JSON.parse(localStorage.getItem('ms2-players') || '[]'); } catch (e) { S.players = []; }
   S.players = S.players.map(p => ({
     id: p.id || newId(), name: String(p.name || ''), canGK: !!p.canGK,
+    canBack:p.canBack!==false, canForward:p.canForward!==false,
     active: p.active !== false, returnPriority: !!p.returnPriority,
     restPeriods: Array.isArray(p.restPeriods) ? p.restPeriods.filter(n=>Number.isInteger(n)&&n>=0&&n<3) : [],
   }));
@@ -262,7 +284,8 @@ function loadPlayers() {
   const savedFormat = localStorage.getItem('ms2-format');
   if (savedFormat && FORMATS[savedFormat]) S.format = savedFormat;
   const savedInterval = Number(localStorage.getItem('ms2-interval'));
-  if ([3,5].includes(savedInterval)) S.changeInterval = savedInterval;
+  if ([2.5,3,5].includes(savedInterval)) S.changeInterval = savedInterval;
+  try { const cup=JSON.parse(localStorage.getItem('ms2-cup')); if(cup) S.cup={...S.cup,...cup}; } catch(e) {}
   savePlayers();
   renderSetupList();
   renderIntervalToggle();
@@ -272,29 +295,31 @@ function loadPlayers() {
 }
 
 function savePlayers() { localStorage.setItem('ms2-players', JSON.stringify(S.players)); }
-function makePlayer(name='', canGK=false) { return {id:newId(), name, canGK, active:true, returnPriority:false, restPeriods:[]}; }
+function makePlayer(name='', canGK=false) { return {id:newId(), name, canGK, canBack:true, canForward:true, active:true, returnPriority:false, restPeriods:[]}; }
 
 function renderIntervalToggle() {
-  document.getElementById('interval-toggle').innerHTML = [3,5].map(minutes =>
+  document.getElementById('interval-toggle').innerHTML = [2.5,3,5].map(minutes =>
     `<button class="${S.changeInterval===minutes?'active':''}" onclick="setChangeInterval(${minutes})">${minutes} minuter</button>`
   ).join('');
 }
 
-function intervalText(minutes) { return minutes===3 ? 'var tredje minut' : 'var femte minut'; }
+function intervalText(minutes) { return minutes===2.5 ? 'var 2,5 minut' : minutes===3 ? 'var tredje minut' : 'var femte minut'; }
 
 function renderFormatToggle() {
+  renderCupSettings();
   document.getElementById('format-toggle').innerHTML = Object.keys(FORMATS).map(k =>
     `<button class="${S.format===k?'active':''}" onclick="setFormat('${k}')">${FORMATS[k].label}</button>`
   ).join('');
   const f = fmt();
   document.getElementById('format-rules').textContent =
-    `${f.periods} perioder à ${f.periodMin} minuter. Byten sker ${intervalText(f.blockMin)} (${totalSlots()} bytestillfällen). `+
+    `${f.periods} perioder à ${f.periodMin} minuter. Byten sker ${intervalText(f.blockMin)} (${totalSlots()} spelblock). `+
     `1 målvakt och ${f.outfieldCount} utespelare spelar. Målvakten står normalt hela perioden. `+
-    `Den som väntat längst på bänken och spelare som återkommer från paus prioriteras.`;
+    `Den som väntat längst på bänken och spelare som återkommer från paus prioriteras.`+
+    (f.periodMin%f.blockMin ? ` Sista blocket är ${f.periodMin%f.blockMin} minut.` : '');
 }
 
 function setChangeInterval(minutes) {
-  if (![3,5].includes(minutes)) return;
+  if (![2.5,3,5].includes(minutes)) return;
   if (S.slots.length && minutes!==S.changeInterval) { alert('Spara eller avsluta den pågående matchen innan du ändrar bytesintervallet.'); return; }
   S.changeInterval = minutes;
   localStorage.setItem('ms2-interval', String(minutes));
@@ -339,21 +364,26 @@ function discardMatch() {
 }
 
 function renderSetupList() {
+  const locked=S.slots.length?'disabled':'';
+  document.getElementById('position-toggle').innerHTML=`<label style="display:block;margin:12px 0"><input type="checkbox" ${S.cup.positions?'checked':''} ${locked} onchange="setCupPositions(this.checked)"> Välj backar och forwards</label><p class="history-meta">${S.cup.positions?'Enbart MV betyder målvakt hela matchen (högst en spelare). För utespelare: kryssa en eller båda positionerna. Vid båda väljer appen en position för hela matchen. MV kan stå en period och spelar annars sin valda utespelarposition.':'Av: alla kan spela både back och forward; fri rotation.'}</p>`;
   document.getElementById('setup-list').innerHTML = S.players.map((p,i) => `
     <div class="row">
-      <input type="text" placeholder="Namn" value="${esc(p.name)}"
-        oninput="S.players[${i}].name=this.value" onblur="savePlayers()">
-      <label>
-        <input type="checkbox" ${p.canGK?'checked':''} onchange="S.players[${i}].canGK=this.checked;savePlayers()">
-        MV
-      </label>
-      <button class="btn-x" onclick="removeSetupRow(${i})">×</button>
+      <input type="text" aria-label="Spelarnamn ${i+1}" placeholder="Namn" value="${esc(p.name)}" ${locked}
+        oninput="S.players[${i}].name=this.value" onblur="savePlayers();renderCupSettings()">
+      <label><input type="checkbox" ${p.canGK?'checked':''} ${locked} onchange="S.players[${i}].canGK=this.checked;savePlayers();renderCupSettings()">MV</label>
+      <label><input type="checkbox" ${!S.cup.positions||p.canBack!==false?'checked':''} ${!S.cup.positions?'disabled':locked} onchange="setPositionOption(${i},'canBack',this.checked)">Back</label>
+      <label><input type="checkbox" ${!S.cup.positions||p.canForward!==false?'checked':''} ${!S.cup.positions?'disabled':locked} onchange="setPositionOption(${i},'canForward',this.checked)">Forward</label>
+      <button class="btn-x" ${locked} onclick="removeSetupRow(${i})">×</button>
     </div>`).join('');
 }
+function setPositionOption(index,key,value) {
+  if(S.slots.length || !['canBack','canForward'].includes(key))return;
+  S.players[index][key]=value;S.cup.roles={};savePlayers();saveCup();
+}
 
-function addSetupRow() { S.players.push(makePlayer()); renderSetupList(); savePlayers(); }
-function removeSetupRow(i) { S.players.splice(i,1); renderSetupList(); savePlayers(); }
-function clearAll() { if(confirm('Rensa spelare?')){ S.players=[]; for(let i=0;i<8;i++) S.players.push(makePlayer()); renderSetupList(); savePlayers(); } }
+function addSetupRow() { if(S.slots.length){alert('Spara eller avsluta matchen innan du ändrar truppen.');return;} S.players.push(makePlayer()); renderSetupList(); savePlayers(); }
+function removeSetupRow(i) { if(S.slots.length){alert('Använd Hantera under pågående match.');return;} S.players.splice(i,1); renderSetupList(); savePlayers(); renderCupSettings(); }
+function clearAll() { if(S.slots.length){alert('Spara eller avsluta matchen innan du rensar spelarna.');return;} if(confirm('Rensa spelare?')){ S.players=[]; for(let i=0;i<8;i++) S.players.push(makePlayer()); renderSetupList(); savePlayers(); } }
 
 // ══════════════════════════════════════════════
 //  ALGORITHM
@@ -381,6 +411,7 @@ function pickGK(capable, used, mins) {
 }
 
 function buildSchedule() {
+  if(S.format==='1x25'||S.cup.positions) return buildCupSchedule(0);
   const players = activePlayers();
   if (players.length < 5) { alert('Minst 5 aktiva spelare krävs.'); return false; }
   const f = fmt();
@@ -438,6 +469,7 @@ function shuffleArr(arr) {
 
 // Recalculate slots from index `from` onwards, respecting current-period GK
 function recalcFrom(from) {
+  if(S.format==='1x25'||S.cup.positions) return buildCupSchedule(from);
   const f = fmt();
   const total = totalSlots();
   if (from >= total) return;
@@ -518,6 +550,8 @@ function applySwap(slotIdx, idA, idB) {
   const cur = currentSlotIdx();
   if (slotIdx < cur) { showToast('Passerade block är låsta.'); return false; }
   const slot = S.slots[slotIdx];
+  if((S.format==='1x25'||S.cup.positions) && (idA===slot.gk || idB===slot.gk)) { showToast('Målvakten behålls inom perioden. Använd Hantera vid skada.'); return false; }
+  if(slot.roles && (slot.roles[idA]||'back')!==(slot.roles[idB]||'back')) { showToast('Byt inom samma position. Ändrad positionsrotation gäller från nästa byte.'); return false; }
   const pos = {};
   pos[slot.gk] = 'gk';
   slot.on.forEach(id => pos[id] = 'on'); slot.bench.forEach(id => pos[id] = 'bench');
@@ -557,7 +591,7 @@ function renderMatch() {
 
     html += `<div class="slot ${state}" id="slot-${i}">
       <div class="slot-inner">
-        <div class="slot-time">${sl.startMin}–${sl.startMin+fmt().blockMin} min${i===cur?' · Nu':''}</div>
+        <div class="slot-time">${sl.startMin}–${sl.startMin+slotMinutes(sl)} min${i===cur?' · Nu':''}</div>
         <div class="chip-row">
           <span class="chip ${pfx}gk" data-slot="${i}" data-id="${sl.gk}">🧤 ${esc(playerName(sl.gk))}</span>
           ${sl.on.map(id=>`<span class="chip ${pfx}on" data-slot="${i}" data-id="${id}">${esc(playerName(id))}</span>`).join('')}
@@ -575,6 +609,7 @@ function renderMatch() {
   });
 
   document.getElementById('match-slots').innerHTML = html;
+  renderCupMatch();
   renderBalance();
   updateTimerDisplay();
   saveMatchState();
@@ -585,8 +620,8 @@ function renderBalance() {
   const mins = {};
   S.players.filter(p=>p.name.trim()).forEach(p => mins[p.id]=0);
   S.slots.forEach(sl => {
-    sl.on.forEach(id=>{ if(id in mins) mins[id]+=fmt().blockMin; });
-    if(sl.gk in mins) mins[sl.gk]+=fmt().blockMin;
+    sl.on.forEach(id=>{ if(id in mins) mins[id]+=slotMinutes(sl); });
+    if(sl.gk in mins) mins[sl.gk]+=slotMinutes(sl);
   });
   const sorted = Object.entries(mins).sort((a,b)=>b[1]-a[1]);
   document.getElementById('balance-panel').innerHTML = sorted.map(([id,m])=>`
@@ -609,8 +644,10 @@ function updateTimerDisplay() {
   const m = Math.floor(S.seconds/60).toString().padStart(2,'0');
   const s = (S.seconds%60).toString().padStart(2,'0');
   document.getElementById('timer-disp').textContent = `${m}:${s}`;
-  document.getElementById('timer-period').textContent = `Period ${sl.period+1}`;
-  document.getElementById('timer-hint').textContent = S.timerOn ? 'Tryck för att pausa' : 'Tryck för att starta';
+  const ended=S.seconds>=totalMatchMin()*60;
+  const periodBreak=!S.timerOn&&S.seconds>0&&S.seconds%(fmt().periodMin*60)===0;
+  document.getElementById('timer-period').textContent = ended?'Matchen slut':periodBreak?`Period ${S.seconds/(fmt().periodMin*60)} slut`:`Period ${sl.period+1}`;
+  document.getElementById('timer-hint').textContent = ended?'Spara matchen':periodBreak?`Tryck för att starta period ${S.seconds/(fmt().periodMin*60)+1}`:S.timerOn?'Tryck för att pausa':'Tryck för att starta';
 }
 
 // ══════════════════════════════════════════════
@@ -811,6 +848,7 @@ function endPlayerRest(id) {
 }
 
 function addMidMatch() {
+  if(S.cup.positions){alert('Med fasta positioner behöver truppen väljas före matchen. Använd paus/återkomst för befintliga spelare.');return;}
   const name = document.getElementById('new-name').value.trim();
   if (!name) return;
   const canGK = document.getElementById('new-gk').checked;
@@ -826,6 +864,12 @@ function addMidMatch() {
 function pausePlayer(id) {
   const p = playerById(id);
   if (!p || !p.active) return;
+  if(S.format==='1x25'||S.cup.positions) {
+    const cur=currentSlotIdx(); p.active=false;
+    if(!buildCupSchedule(cur)) { p.active=true; return; }
+    p.returnPriority=false; S.events.push({type:'pause',at:elapsedSeconds(),playerId:id});
+    savePlayers(); closeModal(); renderMatch(); return;
+  }
   if (activePlayers().length <= 5) { alert('Minst fem aktiva spelare behövs. Lägg till en ersättare först.'); return; }
   const cur=currentSlotIdx(), sl=S.slots[cur];
   let replacementId=null;
@@ -867,21 +911,19 @@ function closeModal() { document.getElementById('modal-bg').classList.remove('op
 //  TIMER
 // ══════════════════════════════════════════════
 function toggleTimer() {
-  if (S.timerOn) {
-    S.baseSeconds = elapsedSeconds();
-    S.timerOn = false;
-    S.anchorStart = null;
-    clearInterval(S.timerRef);
-    releaseWakeLock();
-  } else {
-    S.anchorStart = Date.now();
-    S.timerOn = true;
-    S.timerRef = setInterval(tick, 1000);
-    requestWakeLock();
-  }
+  const wasRunning=S.timerOn;
   syncSeconds();
-  updateTimerDisplay();
-  saveMatchState();
+  if(wasRunning) {
+    // A late tap after a suspended tab reached the boundary must not start
+    // the next period as a side effect of stopping the previous one.
+    if(S.timerOn)stopTimerAt(S.seconds);
+  } else if(S.seconds<totalMatchMin()*60) {
+    S.baseSeconds=S.seconds;
+    S.anchorStart=Date.now();S.timerOn=true;
+    S.timerRef=setInterval(tick,1000);requestWakeLock();
+    consumeReturnPriorities();
+  }
+  renderMatch();
 }
 
 function tick() {
@@ -890,7 +932,7 @@ function tick() {
   syncSeconds();
   updateTimerDisplay();
   if (Math.floor(S.seconds/blockSeconds) !== prevBlock) {
-    consumeReturnPriorities();
+    if(S.timerOn)consumeReturnPriorities();
     renderMatch();
   }
 }
@@ -917,7 +959,7 @@ function releaseWakeLock() {
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    if (S.timerOn) { tick(); requestWakeLock(); }
+    if (S.timerOn) { tick(); if(S.timerOn)requestWakeLock(); }
   } else {
     releaseWakeLock();
   }
@@ -968,6 +1010,7 @@ function applyTimeInput() {
 
 function setElapsedTime(totalSeconds) {
   S.baseSeconds = Math.min(totalMatchMin()*60,Math.max(0,totalSeconds));
+  if(S.baseSeconds>0 && (S.baseSeconds%(fmt().periodMin*60)===0 || S.baseSeconds===totalMatchMin()*60))stopTimerAt(S.baseSeconds);
   S.anchorStart = S.timerOn ? Date.now() : null;
   syncSeconds();
   closeModal();
@@ -981,7 +1024,7 @@ function setElapsedTime(totalSeconds) {
 function saveMatchState() {
   if (!S.slots.length) { localStorage.removeItem('ms2-match'); return; }
   localStorage.setItem('ms2-match', JSON.stringify({
-    version:4, matchId:S.matchId, matchName:S.matchName, format:S.format, changeInterval:S.changeInterval, slots:S.slots,
+    version:6, positionMode:S.cup.positions, matchRoles:S.cup.roles, cup:S.format==='1x25'?S.cup:null, matchId:S.matchId, matchName:S.matchName, format:S.format, changeInterval:S.changeInterval, slots:S.slots,
     events:S.events, baseSeconds:S.baseSeconds, anchorStart:S.anchorStart, timerOn:S.timerOn,
   }));
 }
@@ -999,7 +1042,10 @@ function loadMatchState() {
     const saved = JSON.parse(raw);
     if (!saved.slots || !saved.slots.length) return false;
     if (saved.format && FORMATS[saved.format]) S.format=saved.format;
-    S.changeInterval=[3,5].includes(Number(saved.changeInterval))?Number(saved.changeInterval):5;
+    S.changeInterval=[2.5,3,5].includes(Number(saved.changeInterval))?Number(saved.changeInterval):5;
+    if(saved.cup) S.cup={...S.cup,...saved.cup};
+    S.cup.positions=saved.positionMode ?? (saved.cup?.positions||false);
+    S.cup.roles=saved.matchRoles||saved.cup?.roles||{};
     S.slots = saved.slots.map(migrateSlot);
     if (S.slots.length!==totalSlots() || S.slots.some(sl=>!sl.gk)) throw new Error('Ogiltigt sparat schema');
     S.matchId=saved.matchId||newId('match');
@@ -1035,12 +1081,12 @@ function renderHistoryModal(title,sub,body){
   title.textContent=item.name||'Namnlös match';
   sub.textContent=`${FORMATS[item.format]?.label||item.format} · byten ${item.changeInterval||5} min · sparad ${new Date(item.finishedAt).toLocaleString('sv-SE')}`;
   const mins={}, names={}; item.players.forEach(p=>{mins[p.id]=0;names[p.id]=p.name;});
-  const blockMin=[3,5].includes(Number(item.changeInterval))?Number(item.changeInterval):5;
-  item.slots.forEach(sl=>{[sl.gk,...sl.on].forEach(id=>{if(id in mins)mins[id]+=blockMin;});});
+  const blockMin=[2.5,3,5].includes(Number(item.changeInterval))?Number(item.changeInterval):5;
+  item.slots.forEach(sl=>{[sl.gk,...sl.on].forEach(id=>{if(id in mins)mins[id]+=Math.min(blockMin,(FORMATS[item.format]?.periodMin||15)-sl.sub*blockMin);});});
   body.innerHTML=`<div class="section-label">Speltid</div>`+item.players.map(p=>`
     <div class="mitem"><span>${esc(p.name)}${p.canGK?' 🧤':''}</span><span class="badge">${mins[p.id]||0} min</span></div>`).join('')+
     `<div class="section-label">Schema</div>`+item.slots.map(sl=>`
-      <div class="mitem" style="display:block;cursor:default"><div>${sl.startMin}–${sl.startMin+blockMin} min · MV ${esc(names[sl.gk]||'Okänd')}</div>
+      <div class="mitem" style="display:block;cursor:default"><div>${sl.startMin}–${sl.startMin+Math.min(blockMin,(FORMATS[item.format]?.periodMin||15)-sl.sub*blockMin)} min · MV ${esc(names[sl.gk]||'Okänd')}</div>
       <div class="history-meta">Plan: ${sl.on.map(id=>esc(names[id]||'Okänd')).join(', ')}${sl.bench.length?` · Bänk: ${sl.bench.map(id=>esc(names[id]||'Okänd')).join(', ')}`:''}${(sl.rest||[]).length?` · Vila/skadad: ${(sl.rest||[]).map(id=>esc(names[id]||'Okänd')).join(', ')}`:''}</div></div>`).join('')+
     `<button class="btn bb-red" onclick="deleteHistory('${item.id}')">Radera sparad match</button>`;
 }
@@ -1050,16 +1096,19 @@ function deleteHistory(id){
 }
 
 function finishMatch(){
+  if(!S.slots.length) return false;
   syncSeconds();
-  if(!confirm(`Spara "${S.matchName||'Namnlös match'}" i matchhistoriken?`))return;
+  if(!confirm(`Spara "${S.matchName||'Namnlös match'}" i matchhistoriken?`))return false;
   if(S.timerOn){S.baseSeconds=elapsedSeconds();S.timerOn=false;S.anchorStart=null;clearInterval(S.timerRef);releaseWakeLock();}
-  const snapshot={id:S.matchId||newId('match'),name:S.matchName||'Namnlös match',format:S.format,changeInterval:S.changeInterval,
+  const snapshot={cupId:S.format==='1x25'?S.cup.id:null,positions:S.cup.positions,roles:{...S.cup.roles},id:S.matchId||newId('match'),name:S.matchName||'Namnlös match',format:S.format,changeInterval:S.changeInterval,
     finishedAt:new Date().toISOString(),elapsedSeconds:S.baseSeconds,players:S.players.filter(p=>p.name.trim()).map(p=>({...p})),
     slots:S.slots.map(sl=>({...sl,on:[...sl.on],bench:[...sl.bench],rest:[...(sl.rest||[])]})),events:S.events.map(e=>({...e}))};
   const history=loadHistory().filter(x=>x.id!==snapshot.id); history.unshift(snapshot); saveHistory(history);
+  if(S.format==='1x25') archiveCupMatch(snapshot);
   localStorage.removeItem('ms2-match'); S.slots=[]; S.events=[]; S.matchId=null;
   S.players.forEach(p=>{p.active=!!p.name.trim();p.returnPriority=false;p.restPeriods=[];}); savePlayers();
   showScreen('setup'); renderHistory(); showToast('Matchen har sparats i historiken.');
+  return true;
 }
 
 // ══════════════════════════════════════════════
@@ -1103,10 +1152,213 @@ function onRegenerate() {
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById('screen-'+id).classList.add('active');
+  globalThis.scrollTo?.({top:0});
   if(id==='setup'){
     document.getElementById('match-name-input').value=S.slots.length?S.matchName:'';
     renderSetupList(); renderIntervalToggle(); renderFormatToggle(); renderSetupMatchActions(); renderHistory();
   }
+}
+
+
+// Cup settings persist independently from the rolling match-history limit.
+function slotMinutes(sl) { return Math.min(fmt().blockMin,fmt().periodMin-sl.sub*fmt().blockMin); }
+function saveCup() { localStorage.setItem('ms2-cup',JSON.stringify(S.cup)); }
+function cupRole(id) { return S.cup.roles[id]||'back'; }
+function renderCupSettings() {
+  const root=document.getElementById('cup-settings');
+  if(S.format!=='1x25') {root.innerHTML='';return;}
+  const players=S.players.filter(p=>p.name.trim());
+  const locked=S.slots.length?'disabled':'';
+  root.innerHTML=`<h2>Cup · ${S.cup.matches} sparade matcher</h2>
+    <p>Av: fri rotation. På: byten inom varje grupp. Målvakten står hela matchen.</p>
+    <label>Målvakt <select ${locked} onchange="S.cup.gk=this.value;saveCup();renderCupSettings()"><option value="">Föreslå automatiskt</option>${players.filter(p=>p.canGK).map(p=>`<option value="${p.id}" ${S.cup.gk===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+    ${S.cup.positions?`<button class="btn btn-ghost" ${locked} onclick="suggestCupGroups();renderSetupList();renderCupSettings()">Föreslå grupper</button>`:''}
+    <button class="btn btn-ghost" ${locked} onclick="resetCup()">Starta ny cup (nollställ cupsummeringen)</button>`;
+}
+function resetCup() {
+  if(S.slots.length || !confirm('Starta en ny cup? Sparad matchhistorik behålls.'))return;
+  S.cup={id:newId('cup'),positions:S.cup.positions,roles:{},gk:null,totals:{},matches:0};
+  suggestCupGroups();renderSetupList();renderCupSettings();
+}
+function suggestCupGroups() {
+  if(S.slots.length)return;
+  const players=S.players.filter(p=>p.name.trim());
+  const sole=S.cup.positions?players.find(keeperOnly):null;
+  if(sole)S.cup.gk=sole.id;
+  const keepers=players.filter(p=>p.canGK).sort((a,b)=>(S.cup.totals[a.id]?.gk||0)-(S.cup.totals[b.id]?.gk||0));
+  if(!players.some(p=>p.id===S.cup.gk&&p.canGK)) S.cup.gk=keepers[0]?.id||null;
+  const field=players.filter(p=>p.id!==S.cup.gk);
+  S.cup.roles=Object.fromEntries(field.map((p,i)=>[p.id,i<Math.ceil(field.length/2)?'back':'forward']));applyGroupOptions();saveCup();
+}
+function applyGroupOptions() {
+  S.players.forEach(p=>{if(keeperOnly(p))return;const role=S.cup.roles[p.id];p.canBack=!role||role==='back';p.canForward=!role||role==='forward';});savePlayers();
+}
+function setCupPositions(enabled) {
+  if(S.slots.length){alert('Spara eller avsluta matchen innan du ändrar positionsläget.');renderSetupList();return;}
+  S.cup.positions=enabled;S.cup.roles={};
+  saveCup();renderSetupList();renderCupSettings();
+}
+// Find one assignment for the entire match, including all potential GK periods.
+// Dynamic programming avoids enumerating every combination of flexible players.
+function keeperOnly(p) { return p.canGK && p.canBack===false && p.canForward===false; }
+function assignMatchRoles(players) {
+  // Enumerate by role counts and per-period availability/MV counts. Assignments with
+  // identical counts are interchangeable for feasibility; keep only one.
+  let states=[{}];
+  for(const p of players) {
+    const next=new Map();
+    const options=keeperOnly(p)?['keeper']:[p.canBack!==false?'back':null,p.canForward!==false?'forward':null].filter(Boolean);
+    for(const roles of states) for(const role of options) {
+      const candidate={...roles,[p.id]:role};
+      const assigned=players.filter(q=>candidate[q.id]);
+      const key=Array.from({length:fmt().periods},(_,period)=>{
+        const av=assigned.filter(q=>!isRestingInPeriod(q,period));
+        return ['back','forward'].flatMap(r=>[av.filter(q=>candidate[q.id]===r).length,av.filter(q=>candidate[q.id]===r&&q.canGK).length]);
+      }).flat().join(',')+'|'+(candidate[S.cup.gk]||'');
+      if(!next.has(key))next.set(key,candidate);
+    }
+    states=[...next.values()];
+  }
+  const viable=states.filter(roles=>Array.from({length:fmt().periods},(_,period)=>period).every(period=>{
+    const av=players.filter(p=>!isRestingInPeriod(p,period));
+    const sole=av.find(keeperOnly);
+    return av.some(gk=>gk.canGK&&(sole?gk.id===sole.id:(S.format!=='1x25'||!S.cup.gk||gk.id===S.cup.gk))&&['back','forward'].every(r=>av.filter(p=>p.id!==gk.id&&roles[p.id]===r).length>=2));
+  }));
+  viable.sort((a,b)=>{
+    const field=players.filter(p=>S.format!=='1x25'||p.id!==S.cup.gk);
+    const score=roles=>Math.abs(field.filter(p=>roles[p.id]==='back').length-Math.ceil(field.length/2));
+    return score(a)-score(b);
+  });
+  return viable[0]||null;
+}
+function buildCupSchedule(from=0) {
+  const f=fmt(),players=activePlayers(),isCup=S.format==='1x25';
+  if(S.cup.positions && players.filter(keeperOnly).length>1){alert('Två eller fler spelare har endast MV valt. Välj Back eller Forward även för alla utom en av dem.');return false;}
+  if(players.length<5){alert('Minst fem tillgängliga spelare krävs.');return false;}
+  if(from>=totalSlots())return true;
+  let roles={...S.cup.roles};
+  if(S.cup.positions && from===0 && !S.slots.length) {
+    roles=assignMatchRoles(players);
+    if(!roles){alert('Positionerna räcker inte: välj minst två backar och två forwards utöver målvakten i varje period. Båda kryssen låter appen välja en fast position.');return false;}
+  }
+  if(S.cup.positions && players.some(p=>!roles[p.id])) {alert('Nya spelare behöver en position. Avsluta matchen och justera uppställningen.');return false;}
+  const mins=Object.fromEntries(players.map(p=>[p.id,isCup?(S.cup.totals[p.id]?.out||0):0]));
+  const wait=Object.fromEntries(players.map(p=>[p.id,0]));
+  const gkUsed={};
+  const priority=new Set(players.filter(p=>p.returnPriority).map(p=>p.id));
+  const slots=S.slots.slice(0,from);
+  slots.forEach(sl=>{
+    sl.on.forEach(id=>{mins[id]=(mins[id]||0)+slotMinutes(sl);wait[id]=0;});
+    if(!isCup)mins[sl.gk]=(mins[sl.gk]||0)+slotMinutes(sl);
+    sl.bench.forEach(id=>wait[id]=(wait[id]||0)+1);
+    if(sl.sub===0)gkUsed[sl.gk]=(gkUsed[sl.gk]||0)+1;
+    (sl.rest||[]).forEach(id=>{mins[id]=(mins[id]||0)+neutralRestCredit(slotMinutes(sl),1+sl.on.length+sl.bench.length);wait[id]=0;});
+  });
+  for(let i=from;i<totalSlots();i++) {
+    const period=Math.floor(i/subsPerPeriod()),sub=i%subsPerPeriod();
+    const av=availablePlayers(period);
+    const sole=S.cup.positions?av.find(keeperOnly):null;
+    const validGK=av.filter(gk=>gk.canGK&&(!sole||gk.id===sole.id)&&(!S.cup.positions||['back','forward'].every(r=>av.filter(p=>p.id!==gk.id&&roles[p.id]===r).length>=2)));
+    if(av.length<5||!validGK.length){alert('För få tillgängliga spelare i någon position eller ingen möjlig målvakt.');return false;}
+    let gk=sub>0?slots[i-1]?.gk:(i===from&&S.slots[i]?S.slots[i].gk:(isCup?S.cup.gk:null));
+    if(!validGK.some(p=>p.id===gk))gk=validGK.sort((a,b)=>(gkUsed[a.id]||0)-(gkUsed[b.id]||0)||(isCup?(S.cup.totals[a.id]?.gk||0)-(S.cup.totals[b.id]?.gk||0):(mins[a.id]||0)-(mins[b.id]||0)))[0].id;
+    if(sub===0)gkUsed[gk]=(gkUsed[gk]||0)+1;
+    const field=av.map(p=>p.id).filter(id=>id!==gk);
+    const on=S.cup.positions?['back','forward'].flatMap(role=>rankOutfield(field.filter(id=>roles[id]===role),mins,wait,priority).slice(0,2)):rankOutfield(field,mins,wait,priority).slice(0,4);
+    const bench=field.filter(id=>!on.includes(id));
+    const rest=players.filter(p=>isRestingInPeriod(p,period)).map(p=>p.id);
+    const sl={startMin:period*f.periodMin+sub*f.blockMin,period,sub,gk,on,bench,rest,roles:S.cup.positions?{...roles}:null};
+    slots.push(sl);
+    on.forEach(id=>{mins[id]+=slotMinutes(sl);wait[id]=0;priority.delete(id);});bench.forEach(id=>wait[id]++);
+    wait[gk]=0;priority.delete(gk);if(!isCup)mins[gk]+=slotMinutes(sl);
+    rest.forEach(id=>{mins[id]+=neutralRestCredit(slotMinutes(sl),av.length);wait[id]=0;});
+  }
+  S.slots=slots;S.cup.roles=roles;
+  if(isCup){S.cup.gk=slots[0].gk;S.cup.id ||= newId('cup');}
+  saveCup();return true;
+}
+function cupMatchMinutes(item) {
+  const totals={};
+  // As in the existing balance view, manual swaps are attributed to whole blocks.
+  item.slots.forEach(sl=>{
+    const duration=Math.max(0,Math.min(item.changeInterval,25-sl.startMin,item.elapsedSeconds/60-sl.startMin));
+    [sl.gk,...sl.on].forEach(id=>{totals[id] ||= {out:0,gk:0};totals[id][id===sl.gk?'gk':'out']+=duration;});
+  });return totals;
+}
+function archiveCupMatch(snapshot) {
+  if(S.cup.lastMatchId===snapshot.id)return;
+  const minutes=cupMatchMinutes(snapshot);
+  Object.entries(minutes).forEach(([id,m])=>{S.cup.totals[id] ||= {out:0,gk:0};S.cup.totals[id].out+=m.out;S.cup.totals[id].gk+=m.gk;});
+  S.cup.matches++;
+  S.cup.lastMatchId=snapshot.id;
+  const sole=S.cup.positions?S.players.find(p=>p.name.trim()&&keeperOnly(p)):null;
+  if(sole){S.cup.gk=sole.id;saveCup();return;}
+  const oldGK=S.cup.gk, oldRoles={...S.cup.roles};
+  const candidates=S.players.filter(p=>p.name.trim()&&p.canGK&&p.id!==oldGK&&(!S.cup.positions||cupRole(p.id)==='back'));
+  candidates.sort((a,b)=>(S.cup.totals[a.id]?.gk||0)-(S.cup.totals[b.id]?.gk||0));
+  S.cup.gk=candidates[0]?.id||null;
+  if(S.cup.positions && S.cup.gk) S.cup.roles=Object.fromEntries(S.players.filter(p=>p.name.trim()&&p.id!==S.cup.gk).map(p=>[p.id,p.id===oldGK||oldRoles[p.id]==='forward'?'back':'forward']));
+  if(S.cup.positions && S.cup.gk)applyGroupOptions();
+  saveCup();
+}
+function savedCupSummary(cupId) {
+  const matches=cupId?loadHistory().filter(item=>item.cupId===cupId):[];
+  const players=new Map();
+  for(const item of matches) {
+    for(const p of item.players) if(!players.has(p.id))players.set(p.id,{id:p.id,name:p.name,out:0,gk:0});
+    for(const [id,minutes] of Object.entries(cupMatchMinutes(item))) {
+      if(!players.has(id))players.set(id,{id,name:'Okänd spelare',out:0,gk:0});
+      const row=players.get(id);row.out+=minutes.out;row.gk+=minutes.gk;
+    }
+  }
+  return {matches,players:[...players.values()].map(p=>({...p,total:p.out+p.gk})).sort((a,b)=>a.name.localeCompare(b.name,'sv'))};
+}
+function summaryMinutes(minutes) { return minutes.toLocaleString('sv-SE',{maximumFractionDigits:1}); }
+function openCupSummary(cupId=S.cup.id) {
+  const history=loadHistory();
+  const cupIds=[...new Set([S.cup.id,...history.map(item=>item.cupId)].filter(Boolean))];
+  if(!cupIds.includes(cupId))cupId=cupIds[0]||null;
+  const summary=savedCupSummary(cupId);
+  const title=document.getElementById('modal-title'),sub=document.getElementById('modal-sub'),body=document.getElementById('modal-body');
+  title.textContent='Cupsummering';
+  sub.textContent=`${summary.matches.length} sparade matcher · minuter. Pågående match ingår inte.`;
+  const selector=cupIds.length?`<label>Cup <select style="max-width:100%" onchange="openCupSummary(this.value)">${cupIds.map(id=>{
+    const match=history.find(item=>item.cupId===id);
+    const label=(id===S.cup.id?'Aktuell cup':'Tidigare cup')+(match?' · '+new Date(match.finishedAt).toLocaleDateString('sv-SE')+' · '+match.name:'');
+    return `<option value="${esc(id)}" ${id===cupId?'selected':''}>${esc(label)}</option>`;
+  }).join('')}</select></label>`:'';
+  const total=summary.players.reduce((sum,p)=>({gk:sum.gk+p.gk,out:sum.out+p.out,total:sum.total+p.total}),{gk:0,out:0,total:0});
+  const row=p=>`<tr><th scope="row" style="text-align:left;padding:8px 4px;overflow-wrap:anywhere">${esc(p.name)}</th><td>${summaryMinutes(p.gk)}</td><td>${summaryMinutes(p.out)}</td><td><b>${summaryMinutes(p.total)}</b></td></tr>`;
+  body.innerHTML=selector+(summary.matches.length?`<table style="width:100%;table-layout:fixed;text-align:right;font-size:14px;margin-top:12px"><thead><tr><th style="width:40%;text-align:left">Spelare</th><th scope="col">MV</th><th scope="col">Utespel</th><th scope="col">Totalt</th></tr></thead><tbody>${summary.players.map(row).join('')}</tbody><tfoot>${row({...total,name:'Summa'})}</tfoot></table><p class="history-meta">Tiden räknas fram till varje sparad matchklocka. Byten mitt i block räknas enligt blockets slutliga uppställning.</p><details><summary>Matcher som ingår</summary>${summary.matches.map(item=>`<div class="history-meta">${esc(item.name)} · ${summaryMinutes(Math.min(25,item.elapsedSeconds/60))} min</div>`).join('')}</details>`:'<p>Inga sparade matcher i den här cupen ännu. Spara en cupmatch för att se summeringen.</p>');
+  document.getElementById('modal-bg').classList.add('open');
+}
+function nextCupMatch() {
+  if(S.format!=='1x25')return;
+  if(elapsedSeconds()<1500 && !confirm('Matchen är inte 25 minuter ännu. Bara tiden fram till klockans nuvarande värde räknas i cupen. Fortsätt?'))return;
+  finishMatch();
+}
+function renderCupMatch() {
+  const root=document.getElementById('cup-match-controls'), totals=document.getElementById('cup-totals');
+  root.innerHTML=S.format==='1x25'?`<button class="btn btn-primary" onclick="nextCupMatch()">Spara och förbered nästa cupmatch →</button><button class="btn btn-ghost" onclick="openCupSummary()">Visa cupsummering · sparade matcher</button>`:'';
+  // Preserve per-slot roles so toggling never relabels past blocks.
+  S.slots.forEach((sl,i)=>{
+    if(!sl.roles)return;
+    const slot=document.getElementById('slot-'+i);
+    const pfx=i<currentSlotIdx()?'past-':'';
+    const rows=['back','forward'].map(role=>{
+      const playing=sl.on.filter(id=>(sl.roles[id]||'back')===role), bench=sl.bench.filter(id=>(sl.roles[id]||'back')===role);
+      const prev=S.slots[i-1];
+      const changes=prev?` · In: ${playing.filter(id=>!prev.on.includes(id)).map(id=>esc(playerName(id))).join(', ')||'—'} · Ut: ${prev.on.filter(id=>!sl.on.includes(id)&&(prev.roles?.[id]||'back')===role).map(id=>esc(playerName(id))).join(', ')||'—'}`:'';
+      return `<div class="chip-row"><b>${role==='back'?'Backar':'Forwards'}</b>${playing.map(id=>`<span class="chip ${pfx}on" data-slot="${i}" data-id="${id}">${esc(playerName(id))}</span>`).join('')}<span>bänk:</span>${bench.map(id=>`<span class="chip ${pfx}bench" data-slot="${i}" data-id="${id}">${esc(playerName(id))}</span>`).join('')}</div><div class="history-meta">${changes}</div>`;
+    }).join('');
+    slot.innerHTML=`<div class="slot-inner"><div class="slot-time">${sl.startMin}–${sl.startMin+slotMinutes(sl)} min</div><div>🧤 ${esc(playerName(sl.gk))}</div>${rows}${sl.rest.length?'<div>Vila: '+sl.rest.map(id=>esc(playerName(id))).join(', ')+'</div>':''}</div>`;
+  });
+  if(S.format!=='1x25'){totals.innerHTML='';return;}
+  const current=cupMatchMinutes({slots:S.slots,changeInterval:S.changeInterval,elapsedSeconds:1500});
+  totals.innerHTML='<h2>Cupens speltid</h2><p>Sparad tid + hela pågående matchens plan. Byten mitt i block räknas per block. Ute / MV, minuter.</p>'+S.players.filter(p=>p.name.trim()).map(p=>{
+    const a=S.cup.totals[p.id]||{out:0,gk:0},b=current[p.id]||{out:0,gk:0};
+    return `<div class="bal-row">${esc(p.name)}: ${(a.out+b.out).toFixed(1)} ute / ${(a.gk+b.gk).toFixed(1)} MV</div>`;
+  }).join('');
 }
 
 // ══════════════════════════════════════════════

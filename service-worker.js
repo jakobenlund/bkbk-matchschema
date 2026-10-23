@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bkbk-matchschema-v1';
+const CACHE_NAME = 'bkbk-matchschema-v6-cup-summary';
 const APP_FILES = [
   './',
   './index.html',
